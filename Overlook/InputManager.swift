@@ -162,25 +162,25 @@ class InputManager: ObservableObject {
             isKeyboardCaptureEnabled = true
             return
         }
-        
+
         isCapturing = true
         isKeyboardCaptureEnabled = true
-        
+
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
             self?.handleKeyEvent(event)
             guard let self, self.isKeyboardCaptureEnabled else { return event }
             return nil
         }
     }
-    
+
     func stopKeyboardCapture() {
         isKeyboardCaptureEnabled = false
-        
+
         if let monitor = keyEventMonitor {
             NSEvent.removeMonitor(monitor)
             keyEventMonitor = nil
         }
-        
+
         if !isMouseCaptureEnabled {
             isCapturing = false
         }
@@ -743,6 +743,7 @@ class InputManager: ObservableObject {
         case 25: return "Digit9"
         case 29: return "Digit0"
 
+        case 10: return "IntlBackslash"  // ISO §/± key (EU/UK keyboards, between LShift and Z)
         case 50: return "Backquote"
         case 27: return "Minus"
         case 24: return "Equal"
