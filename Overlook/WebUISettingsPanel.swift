@@ -34,12 +34,10 @@ struct WebUISettingsPanel: View {
     @State private var showingErrorHistory: Bool = false
 
     @State private var isVideoExpanded = true
-    @State private var isRemoteExpanded = true
-    @State private var isKeyboardExpanded = true
-    @State private var isMouseSettingsExpanded = false
+    @State private var isMouseExpanded = false
+    @State private var isKeyboardExpanded = false
     @State private var isAudioExpanded = false
     @State private var isSystemExpanded = false
-    @State private var isNetworkExpanded = false
     @State private var isAdvancedExpanded = false
     @State private var isAgentExpanded = false
 
@@ -461,7 +459,7 @@ struct WebUISettingsPanel: View {
                         .padding(.top, 6)
                     }
 
-                    DisclosureGroup("Remote device settings", isExpanded: $isRemoteExpanded) {
+                    DisclosureGroup("Mouse", isExpanded: $isMouseExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
                             Toggle("Mouse Control", isOn: bindingBool(
                                 get: { $0.mouseControl },
@@ -469,14 +467,17 @@ struct WebUISettingsPanel: View {
                                 defaultValue: true
                             ))
 
-                            Toggle("Keyboard Control", isOn: bindingBool(
-                                get: { $0.keyboardControl },
-                                set: { $0.keyboardControl = $1 },
+                            Picker("Mouse mode", selection: bindingBool(
+                                get: { $0.isAbsoluteMouse },
+                                set: { $0.isAbsoluteMouse = $1 },
                                 defaultValue: true
-                            ))
+                            )) {
+                                Text("Relative").tag(false)
+                                Text("Absolute").tag(true)
+                            }
 
                             HStack {
-                                Text("Mouse Polling")
+                                Text("Polling rate")
                                 Spacer()
                                 let polling = bindingInt(
                                     get: { $0.mousePolling },
@@ -523,7 +524,7 @@ struct WebUISettingsPanel: View {
                                     .labelsHidden()
                             }
 
-                            Picker("Scroll direction", selection: bindingString(
+                            Picker("Scroll direction (remote)", selection: bindingString(
                                 get: { $0.reverseScrolling },
                                 set: { $0.reverseScrolling = $1 },
                                 defaultValue: "STANDARD"
@@ -533,20 +534,16 @@ struct WebUISettingsPanel: View {
                                 }
                             }
 
+                            Toggle("Reverse scroll (local)", isOn: Binding(
+                                get: { inputManager.reverseScrollDirection },
+                                set: { inputManager.reverseScrollDirection = $0 }
+                            ))
+
                             Toggle("Mouse Jiggle", isOn: bindingBool(
                                 get: { $0.mouseJiggle },
                                 set: { $0.mouseJiggle = $1 },
                                 defaultValue: false
                             ))
-
-                            Picker("Mouse mode", selection: bindingBool(
-                                get: { $0.isAbsoluteMouse },
-                                set: { $0.isAbsoluteMouse = $1 },
-                                defaultValue: true
-                            )) {
-                                Text("Relative").tag(false)
-                                Text("Absolute").tag(true)
-                            }
 
                             Stepper(
                                 "Fingerbot strength: \(bindingIntValue(get: { $0.fingerbotStrength }, defaultValue: 0))",
@@ -561,8 +558,14 @@ struct WebUISettingsPanel: View {
                         .padding(.top, 6)
                     }
 
-                    DisclosureGroup("Keyboard settings", isExpanded: $isKeyboardExpanded) {
+                    DisclosureGroup("Keyboard", isExpanded: $isKeyboardExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
+                            Toggle("Keyboard Control", isOn: bindingBool(
+                                get: { $0.keyboardControl },
+                                set: { $0.keyboardControl = $1 },
+                                defaultValue: true
+                            ))
+
                             Picker("Keymap", selection: bindingString(
                                 get: { $0.keymap },
                                 set: { $0.keymap = $1 },
@@ -589,16 +592,6 @@ struct WebUISettingsPanel: View {
                                     }
                                 }
                             }
-                        }
-                        .padding(.top, 6)
-                    }
-
-                    DisclosureGroup("Mouse settings", isExpanded: $isMouseSettingsExpanded) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Toggle("Reverse scroll direction", isOn: Binding(
-                                get: { inputManager.reverseScrollDirection },
-                                set: { inputManager.reverseScrollDirection = $0 }
-                            ))
                         }
                         .padding(.top, 6)
                     }
@@ -670,21 +663,17 @@ struct WebUISettingsPanel: View {
                         .padding(.top, 6)
                     }
 
-                    DisclosureGroup("Network", isExpanded: $isNetworkExpanded) {
-                        VStack(alignment: .leading, spacing: 10) {
-                            NotImplementedRow(title: "Modify")
-                            NotImplementedRow(title: "Wi-Fi")
-                            NotImplementedRow(title: "Ethernet")
-                        }
-                        .padding(.top, 6)
-                    }
-
                     DisclosureGroup("Advanced", isExpanded: $isAdvancedExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
                             Button("Reset KVM") {
                                 Task { await resetKVM() }
                             }
                             .disabled(kvmDeviceManager.glkvmClient == nil)
+
+                            Divider()
+
+                            NotImplementedRow(title: "Wi-Fi")
+                            NotImplementedRow(title: "Ethernet")
                         }
                         .padding(.top, 6)
                     }
