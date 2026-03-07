@@ -32,6 +32,7 @@
 		0100001F /* WebRTCFactoryBuilder.m in Sources */ = {isa = PBXBuildFile; fileRef = 02000021 /* WebRTCFactoryBuilder.m */; };
 		01000020 /* QuickPasteManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000022 /* QuickPasteManager.swift */; };
 		01000021 /* QuickPasteView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000023 /* QuickPasteView.swift */; };
+		01000024 /* AgentServerManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000024 /* AgentServerManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -63,6 +64,7 @@
 		02000021 /* WebRTCFactoryBuilder.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = WebRTCFactoryBuilder.m; sourceTree = "<group>"; };
 		02000022 /* QuickPasteManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPasteManager.swift; sourceTree = "<group>"; };
 		02000023 /* QuickPasteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickPasteView.swift; sourceTree = "<group>"; };
+		02000024 /* AgentServerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentServerManager.swift; sourceTree = "<group>"; };
 		03000001 /* Overlook.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Overlook.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -115,6 +117,7 @@
 				02000011 /* JSONValue.swift */,
 				02000022 /* QuickPasteManager.swift */,
 				02000023 /* QuickPasteView.swift */,
+				02000024 /* AgentServerManager.swift */,
 				02000003 /* Assets.xcassets */,
 				02000005 /* Overlook.entitlements */,
 			);
@@ -228,6 +231,7 @@
 				01000011 /* JSONValue.swift in Sources */,
 				01000020 /* QuickPasteManager.swift in Sources */,
 				01000021 /* QuickPasteView.swift in Sources */,
+				01000024 /* AgentServerManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

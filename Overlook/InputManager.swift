@@ -34,6 +34,11 @@ class InputManager: ObservableObject {
     @Published var isKeyboardCaptureEnabled = false
     @Published var isMouseCaptureEnabled = false
 
+    var reverseScrollDirection: Bool {
+        get { UserDefaults.standard.bool(forKey: "overlook.input.reverseScroll") }
+        set { UserDefaults.standard.set(newValue, forKey: "overlook.input.reverseScroll") }
+    }
+
     enum TransportMode: String, CaseIterable {
         case webRTC
         case glkvmWebSocket
@@ -41,6 +46,9 @@ class InputManager: ObservableObject {
 
     @Published var transportMode: TransportMode = .glkvmWebSocket
     
+    /// Exposes the active WebSocket client for agent/automation use.
+    var agentWebSocketClient: GLKVMClient.WebSocketClient? { glkvmWebSocketClient }
+
     func setup(with webRTCManager: WebRTCManager) {
         self.webRTCManager = webRTCManager
     }
@@ -492,8 +500,9 @@ class InputManager: ObservableObject {
     
     private func sendMouseScrollEvent(_ event: MouseScrollEvent) {
         if transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
-            let dx = clampInt(Int(event.deltaX.rounded()), min: -127, max: 127)
-            let dy = clampInt(Int(event.deltaY.rounded()), min: -127, max: 127)
+            let scrollMultiplier: CGFloat = reverseScrollDirection ? -1 : 1
+            let dx = clampInt(Int((event.deltaX * scrollMultiplier).rounded()), min: -127, max: 127)
+            let dy = clampInt(Int((event.deltaY * scrollMultiplier).rounded()), min: -127, max: 127)
             Task {
                 try? await ws.sendHidMouseWheel(deltaX: dx, deltaY: dy)
             }

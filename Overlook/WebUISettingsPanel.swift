@@ -5,6 +5,7 @@ struct WebUISettingsPanel: View {
     @EnvironmentObject var webRTCManager: WebRTCManager
     @EnvironmentObject var inputManager: InputManager
     @EnvironmentObject var kvmDeviceManager: KVMDeviceManager
+    @EnvironmentObject var agentServerManager: AgentServerManager
 
     @Binding var isPresented: Bool
 
@@ -35,10 +36,12 @@ struct WebUISettingsPanel: View {
     @State private var isVideoExpanded = true
     @State private var isRemoteExpanded = true
     @State private var isKeyboardExpanded = true
+    @State private var isMouseSettingsExpanded = false
     @State private var isAudioExpanded = false
     @State private var isSystemExpanded = false
     @State private var isNetworkExpanded = false
     @State private var isAdvancedExpanded = false
+    @State private var isAgentExpanded = false
 
     @State private var currentEdid: String = ""
     @State private var selectedEdidOption: String = "CUSTOMIZE"
@@ -590,6 +593,16 @@ struct WebUISettingsPanel: View {
                         .padding(.top, 6)
                     }
 
+                    DisclosureGroup("Mouse settings", isExpanded: $isMouseSettingsExpanded) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Toggle("Reverse scroll direction", isOn: Binding(
+                                get: { inputManager.reverseScrollDirection },
+                                set: { inputManager.reverseScrollDirection = $0 }
+                            ))
+                        }
+                        .padding(.top, 6)
+                    }
+
                     DisclosureGroup("Audio", isExpanded: $isAudioExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
                             Toggle("Audio", isOn: $webRTCManager.audioEnabled)
@@ -674,6 +687,10 @@ struct WebUISettingsPanel: View {
                             .disabled(kvmDeviceManager.glkvmClient == nil)
                         }
                         .padding(.top, 6)
+                    }
+
+                    DisclosureGroup("Agent API", isExpanded: $isAgentExpanded) {
+                        AgentAPISettingsSection()
                     }
                 }
                 .padding()
@@ -1239,6 +1256,123 @@ struct WebUISettingsPanel: View {
 
     private func bindingIntValue(get: @escaping (GLKVMSystemConfig) -> Int, defaultValue: Int) -> Int {
         config.map(get) ?? defaultValue
+    }
+}
+
+// MARK: - Agent API Settings
+
+private struct AgentAPISettingsSection: View {
+    @EnvironmentObject var agentServerManager: AgentServerManager
+    @AppStorage(AgentServerManager.portDefaultsKey) private var port: Int = Int(AgentServerManager.defaultPort)
+    @State private var portDraft: String = ""
+    @State private var showAPIKey = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Toggle("Enable Agent HTTP API", isOn: Binding(
+                    get: { agentServerManager.isRunning },
+                    set: { enabled in
+                        UserDefaults.standard.set(enabled, forKey: AgentServerManager.enabledDefaultsKey)
+                        if enabled { agentServerManager.start() } else { agentServerManager.stop() }
+                    }
+                ))
+                Spacer()
+                Circle()
+                    .fill(agentServerManager.isRunning ? Color.green : Color.secondary.opacity(0.4))
+                    .frame(width: 8, height: 8)
+            }
+
+            if let err = agentServerManager.lastError {
+                Text(err)
+                    .foregroundStyle(.red)
+                    .font(.caption)
+            }
+
+            Divider()
+
+            HStack {
+                Text("Port")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                TextField("9876", text: $portDraft)
+                    .frame(width: 60)
+                    .textFieldStyle(.roundedBorder)
+                    .multilineTextAlignment(.trailing)
+                    .onAppear { portDraft = "\(port == 0 ? Int(AgentServerManager.defaultPort) : port)" }
+                    .onSubmit {
+                        if let v = Int(portDraft), (1024...65535).contains(v) {
+                            port = v
+                            if agentServerManager.isRunning {
+                                agentServerManager.stop()
+                                agentServerManager.start()
+                            }
+                        } else {
+                            portDraft = "\(port == 0 ? Int(AgentServerManager.defaultPort) : port)"
+                        }
+                    }
+            }
+
+            HStack {
+                Text("Bound to")
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("localhost only")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("API Key")
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    if showAPIKey {
+                        Text(agentServerManager.apiKey)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
+                        Text(String(repeating: "•", count: 20))
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                    Spacer(minLength: 4)
+                    Button(showAPIKey ? "Hide" : "Show") { showAPIKey.toggle() }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(agentServerManager.apiKey, forType: .string)
+                    }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+                    Button("Regenerate") { agentServerManager.regenerateAPIKey() }
+                        .font(.caption)
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Endpoints")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
+                ForEach(["GET /status", "POST /type", "POST /key", "POST /mouse/move", "POST /mouse/click", "POST /mouse/scroll", "GET /screenshot"], id: \.self) { ep in
+                    Text(ep)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                Text("Authorization: Bearer <api-key>")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .padding(.top, 2)
+            }
+        }
+        .padding(.top, 6)
     }
 }
 

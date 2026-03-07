@@ -17,6 +17,7 @@ struct OverlookApp: App {
                 .environmentObject(appDelegate.ocrManager)
                 .environmentObject(appDelegate.kvmDeviceManager)
                 .environmentObject(appDelegate.quickPasteManager)
+                .environmentObject(appDelegate.agentServerManager)
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unifiedCompact)
@@ -33,8 +34,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let ocrManager = OCRManager()
     let kvmDeviceManager = KVMDeviceManager()
     let quickPasteManager = QuickPasteManager()
-    
+    let agentServerManager = AgentServerManager()
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        agentServerManager.setup(inputManager: inputManager, kvmDeviceManager: kvmDeviceManager)
+        if UserDefaults.standard.bool(forKey: AgentServerManager.enabledDefaultsKey) {
+            agentServerManager.start()
+        }
+
         menuBarAgent = MenuBarAgent(
             kvmDeviceManager: kvmDeviceManager,
             webRTCManager: webRTCManager,
@@ -61,6 +68,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         menuBarAgent?.cleanup()
+        agentServerManager.stop()
         return .terminateNow
     }
 }
