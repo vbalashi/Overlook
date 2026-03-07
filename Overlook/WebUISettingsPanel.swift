@@ -9,6 +9,7 @@ struct WebUISettingsPanel: View {
     @Binding var isPresented: Bool
 
     @AppStorage("overlook.appAppearance") private var appAppearance: String = "system"
+    @AppStorage("overlook.autoResumeLastConnection") private var autoResumeLastConnection: Bool = false
 
     @AppStorage("overlook.audio.inputDeviceUID") private var audioInputDeviceUID: String = ""
     @AppStorage("overlook.audio.outputDeviceUID") private var audioOutputDeviceUID: String = ""
@@ -632,6 +633,8 @@ struct WebUISettingsPanel: View {
 
                     DisclosureGroup("System", isExpanded: $isSystemExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
+                            Toggle("Auto-resume last connection on launch", isOn: $autoResumeLastConnection)
+
                             Picker("App appearance", selection: $appAppearance) {
                                 ForEach(appAppearanceOptions, id: \.0) { value, label in
                                     Text(label).tag(value)

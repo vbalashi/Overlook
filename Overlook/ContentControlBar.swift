@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct ContentControlBar: View {
+    @EnvironmentObject var quickPasteManager: QuickPasteManager
+    @EnvironmentObject var kvmDeviceManager: KVMDeviceManager
+
     @Binding var selectedDevice: KVMDevice?
 
     let devices: [KVMDevice]
@@ -15,6 +18,8 @@ struct ContentControlBar: View {
     let onScan: () -> Void
     let onToggleOCR: () -> Void
     let onToggleConnection: () -> Void
+
+    @State private var showingQuickPaste = false
 
     var body: some View {
         HStack {
@@ -41,6 +46,16 @@ struct ContentControlBar: View {
             .help("Manually enter a device host/IP")
 
             Spacer()
+
+            Button(action: { showingQuickPaste.toggle() }) {
+                Image(systemName: "bolt.fill")
+            }
+            .help("Quick Paste")
+            .popover(isPresented: $showingQuickPaste, arrowEdge: .bottom) {
+                QuickPasteView()
+                    .environmentObject(quickPasteManager)
+                    .environmentObject(kvmDeviceManager)
+            }
 
             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
                 Image(systemName: "gearshape")

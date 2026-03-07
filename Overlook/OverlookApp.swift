@@ -16,6 +16,7 @@ struct OverlookApp: App {
                 .environmentObject(appDelegate.inputManager)
                 .environmentObject(appDelegate.ocrManager)
                 .environmentObject(appDelegate.kvmDeviceManager)
+                .environmentObject(appDelegate.quickPasteManager)
         }
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unifiedCompact)
@@ -31,6 +32,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let inputManager = InputManager()
     let ocrManager = OCRManager()
     let kvmDeviceManager = KVMDeviceManager()
+    let quickPasteManager = QuickPasteManager()
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         menuBarAgent = MenuBarAgent(
