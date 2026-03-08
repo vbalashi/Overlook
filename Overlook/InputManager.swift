@@ -218,6 +218,20 @@ class InputManager: ObservableObject {
                 return
             }
 
+            // Remap ⌥+Tab → ⌘+Tab on remote (app switcher for EU/UK keyboards)
+            if isKeyDown, keyCode == 48, modifiers.contains(.option), !modifiers.contains(.command),
+               transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
+                suppressedKeyUps.insert(keyCode)
+                Task {
+                    try? await ws.sendHidKey(key: "AltLeft", state: false) // undo already-sent AltLeft
+                    try? await ws.sendHidKey(key: "MetaLeft", state: true)
+                    try? await ws.sendHidKey(key: "Tab", state: true)
+                    try? await ws.sendHidKey(key: "Tab", state: false)
+                    try? await ws.sendHidKey(key: "MetaLeft", state: false)
+                }
+                return
+            }
+
             if isKeyDown, modifiers.contains(.command) {
                 if keyCode == 8 {
                     prepareForLocalCommandShortcut()
