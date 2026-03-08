@@ -37,7 +37,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let agentServerManager = AgentServerManager()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        agentServerManager.setup(inputManager: inputManager, kvmDeviceManager: kvmDeviceManager)
+        agentServerManager.setup(inputManager: inputManager, kvmDeviceManager: kvmDeviceManager, webRTCManager: webRTCManager)
         if UserDefaults.standard.bool(forKey: AgentServerManager.enabledDefaultsKey) {
             agentServerManager.start()
         }

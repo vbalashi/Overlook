@@ -1,6 +1,7 @@
 import Foundation
 import Network
 import AppKit
+import CoreImage
 
 // MARK: - AgentServerManager
 
@@ -17,10 +18,12 @@ final class AgentServerManager: ObservableObject {
     private var listener: NWListener?
     private weak var inputManager: InputManager?
     private weak var kvmDeviceManager: KVMDeviceManager?
+    private weak var webRTCManager: WebRTCManager?
 
-    func setup(inputManager: InputManager, kvmDeviceManager: KVMDeviceManager) {
+    func setup(inputManager: InputManager, kvmDeviceManager: KVMDeviceManager, webRTCManager: WebRTCManager) {
         self.inputManager = inputManager
         self.kvmDeviceManager = kvmDeviceManager
+        self.webRTCManager = webRTCManager
     }
 
     // MARK: - API Key
@@ -319,6 +322,17 @@ final class AgentServerManager: ObservableObject {
     }
 
     private func captureScreenshot() -> Data? {
+        // Prefer the live KVM video frame over the Mac display
+        webRTCManager?.setFrameCaptureEnabled(true)
+        if let pixelBuffer = webRTCManager?.currentFrame {
+            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+            let context = CIContext()
+            if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
+                let rep = NSBitmapImageRep(cgImage: cgImage)
+                return rep.representation(using: .png, properties: [:])
+            }
+        }
+        // Fallback: capture the Mac display
         let displayID = CGMainDisplayID()
         guard let cgImage = CGDisplayCreateImage(displayID) else { return nil }
         let rep = NSBitmapImageRep(cgImage: cgImage)
