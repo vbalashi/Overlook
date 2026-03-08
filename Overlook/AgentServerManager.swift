@@ -273,15 +273,21 @@ final class AgentServerManager: ObservableObject {
             }
 
         case ("POST", "/mouse/scroll"):
-            guard let body = jsonBody(req.body),
-                  let dx = body["deltaX"] as? Int, let dy = body["deltaY"] as? Int else {
+            guard let body = jsonBody(req.body) else {
                 return .error("Missing 'deltaX' or 'deltaY'")
             }
+            let dx = asInt(body["deltaX"]) ?? 0
+            let dy = asInt(body["deltaY"]) ?? 0
             guard let ws = inputManager?.agentWebSocketClient else {
                 return .error("Not connected", status: "503 Service Unavailable")
             }
             do {
-                try await ws.sendHidMouseWheel(deltaX: dx, deltaY: dy)
+                let stepsX = dx == 0 ? 0 : (dx > 0 ? 1 : -1)
+                let stepsY = dy == 0 ? 0 : (dy > 0 ? 1 : -1)
+                let count = max(abs(dx), abs(dy))
+                for _ in 0..<count {
+                    try await ws.sendHidMouseWheel(deltaX: stepsX, deltaY: stepsY)
+                }
                 return .json(["ok": true])
             } catch {
                 return .error(error.localizedDescription, status: "500 Internal Server Error")
@@ -303,6 +309,13 @@ final class AgentServerManager: ObservableObject {
     private func jsonBody(_ data: Data) -> [String: Any]? {
         guard !data.isEmpty else { return [:] }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private func asInt(_ value: Any?) -> Int? {
+        guard let value else { return nil }
+        if let i = value as? Int { return i }
+        if let d = value as? Double { return Int(d) }
+        return nil
     }
 
     private func captureScreenshot() -> Data? {
