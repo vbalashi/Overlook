@@ -37,8 +37,12 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/status",
-              "host": ["{{base_url}}"],
-              "path": ["status"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "status"
+              ]
             },
             "description": "Returns whether a KVM device is connected and its name."
           },
@@ -47,14 +51,24 @@
               "name": "Connected",
               "status": "OK",
               "code": 200,
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "body": "{\n  \"connected\": true,\n  \"device\": \"GL.iNet Comet\"\n}"
             },
             {
               "name": "Not Connected",
               "status": "OK",
               "code": 200,
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "body": "{\n  \"connected\": false,\n  \"device\": null\n}"
             }
           ]
@@ -69,17 +83,28 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"Hello, World!\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/type",
-              "host": ["{{base_url}}"],
-              "path": ["type"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "type"
+              ]
             },
             "description": "Types a string of text on the remote machine using HID keyboard emulation. Supports multi-line text and Unicode."
           },
@@ -88,7 +113,12 @@
               "name": "Success",
               "status": "OK",
               "code": 200,
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "body": "{\n  \"ok\": true\n}"
             }
           ]
@@ -98,17 +128,28 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"admin\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/type",
-              "host": ["{{base_url}}"],
-              "path": ["type"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "type"
+              ]
             },
             "description": "Example: type a username into a login field."
           },
@@ -119,17 +160,28 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"key\": \"Enter\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/key",
-              "host": ["{{base_url}}"],
-              "path": ["key"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "key"
+              ]
             },
             "description": "Sends a single key press. Key names are case-sensitive Web KeyboardEvent format: Enter, Escape, Tab, Backspace, Space, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, F1–F12, KeyA–KeyZ, Digit0–Digit9."
           },
@@ -140,17 +192,28 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"key\": \"Tab\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/key",
-              "host": ["{{base_url}}"],
-              "path": ["key"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "key"
+              ]
             },
             "description": "Sends Tab key — useful for moving between form fields."
           },
@@ -161,17 +224,28 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"key\": \"Escape\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/key",
-              "host": ["{{base_url}}"],
-              "path": ["key"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "key"
+              ]
             },
             "description": "Sends the Escape key."
           },
@@ -182,17 +256,28 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"key\": \"ControlLeft+AltLeft+Delete\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/key",
-              "host": ["{{base_url}}"],
-              "path": ["key"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "key"
+              ]
             },
             "description": "Sends Ctrl+Alt+Delete — useful for Windows login screens."
           },
@@ -210,8 +295,13 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/mouse/position",
-              "host": ["{{base_url}}"],
-              "path": ["mouse", "position"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mouse",
+                "position"
+              ]
             },
             "description": "Returns the last known mouse position in HID absolute units (0–32767). Since KVM devices do not report cursor state back, this reflects the position from the most recent /mouse/move call. Defaults to center (16383, 16383) on startup."
           },
@@ -220,7 +310,12 @@
               "name": "Position",
               "status": "OK",
               "code": 200,
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "body": "{\n  \"x\": 16383,\n  \"y\": 16383\n}"
             }
           ]
@@ -230,17 +325,29 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"x\": 0,\n  \"y\": 0\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/mouse/move",
-              "host": ["{{base_url}}"],
-              "path": ["mouse", "move"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mouse",
+                "move"
+              ]
             },
             "description": "Moves the mouse to an absolute position. Coordinates are signed HID units: range -32767 to +32767. (0,0) = center, (-32767,-32767) = top-left, (32767,32767) = bottom-right."
           },
@@ -251,17 +358,29 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"x\": 0,\n  \"y\": 0\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/mouse/move",
-              "host": ["{{base_url}}"],
-              "path": ["mouse", "move"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mouse",
+                "move"
+              ]
             },
             "description": "Move mouse to top-left corner of the remote screen."
           },
@@ -272,17 +391,29 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"button\": \"left\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/mouse/click",
-              "host": ["{{base_url}}"],
-              "path": ["mouse", "click"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mouse",
+                "click"
+              ]
             },
             "description": "Clicks the left mouse button at the current cursor position. Supported buttons: left, right, middle."
           },
@@ -293,38 +424,108 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"button\": \"right\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/mouse/click",
-              "host": ["{{base_url}}"],
-              "path": ["mouse", "click"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mouse",
+                "click"
+              ]
             },
             "description": "Clicks the right mouse button — opens context menus."
           },
           "response": []
         },
         {
+          "name": "Move and Click (Pixel Coords)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"px\": 1676,\n  \"py\": 1390\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/mouse/move-and-click",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mouse",
+                "move-and-click"
+              ]
+            },
+            "description": "Single-step shortcut: converts pixel (px, py) from a screenshot to HID, moves the mouse there, and clicks. Alternatively pass 'x'/'y' (HID) to skip conversion. Optional 'button': left (default), right, middle.\n\nVerified: pixel (1676,1390) in a 3440x1440 frame -> HID (-838, 30491) correctly clicked Chrome dock icon."
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"ok\": true,\n  \"hid_x\": -838,\n  \"hid_y\": 30491\n}"
+            }
+          ]
+        },
+        {
           "name": "Scroll Down",
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"deltaX\": 0,\n  \"deltaY\": -3\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/mouse/scroll",
-              "host": ["{{base_url}}"],
-              "path": ["mouse", "scroll"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mouse",
+                "scroll"
+              ]
             },
             "description": "Scrolls the mouse wheel. Positive deltaY = up, negative = down. Positive deltaX = right, negative = left."
           },
@@ -335,17 +536,29 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"deltaX\": 0,\n  \"deltaY\": 3\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/mouse/scroll",
-              "host": ["{{base_url}}"],
-              "path": ["mouse", "scroll"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "mouse",
+                "scroll"
+              ]
             },
             "description": "Scrolls up by 3 units."
           },
@@ -363,8 +576,12 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/screenshot",
-              "host": ["{{base_url}}"],
-              "path": ["screenshot"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "screenshot"
+              ]
             },
             "description": "Captures the live KVM video frame and returns a PNG image (falls back to Mac display if no frame is available). Use for visual feedback after performing actions."
           },
@@ -373,7 +590,12 @@
               "name": "PNG Image",
               "status": "OK",
               "code": 200,
-              "header": [{ "key": "Content-Type", "value": "image/png" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "image/png"
+                }
+              ],
               "body": ""
             }
           ]
@@ -383,17 +605,28 @@
           "request": {
             "method": "POST",
             "header": [
-              { "key": "Content-Type", "value": "application/json" }
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"Login\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/find-text",
-              "host": ["{{base_url}}"],
-              "path": ["find-text"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "find-text"
+              ]
             },
             "description": "Runs OCR on the current KVM video frame and returns all regions whose text contains the search string (case-insensitive).\n\nHID coordinates (x, y, width, height): signed range -32767 (top-left) to +32767 (bottom-right), center = 0. Use x/y directly with /mouse/move.\n\nPixel coordinates (px, py, pw, ph): position within the video frame, same coordinate space as /screenshot.\n\nHID formula: x = (px / frame_width * 2 - 1) * 32767"
           },
@@ -402,21 +635,36 @@
               "name": "Matches Found",
               "status": "OK",
               "code": 200,
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "body": "{\n  \"matches\": [\n    {\n      \"text\": \"Login\",\n      \"x\": -3200,\n      \"y\": -10500,\n      \"confidence\": 0.98\n    }\n  ]\n}"
             },
             {
               "name": "No Matches",
               "status": "OK",
               "code": 200,
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "body": "{\n  \"matches\": []\n}"
             },
             {
               "name": "No Video Frame",
               "status": "Service Unavailable",
               "code": 503,
-              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
               "body": "{\n  \"error\": \"No video frame available\"\n}"
             }
           ]
@@ -430,16 +678,29 @@
           "name": "Login Flow — Type Username",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"admin\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/type",
-              "host": ["{{base_url}}"],
-              "path": ["type"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "type"
+              ]
             },
             "description": "Step 1 of login: type the username. Follow with Tab → type password → Enter."
           },
@@ -449,16 +710,29 @@
           "name": "Login Flow — Tab to Password",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"key\": \"Tab\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/key",
-              "host": ["{{base_url}}"],
-              "path": ["key"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "key"
+              ]
             },
             "description": "Step 2 of login: tab to the password field."
           },
@@ -468,16 +742,29 @@
           "name": "Login Flow — Type Password",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"my-secret-password\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/type",
-              "host": ["{{base_url}}"],
-              "path": ["type"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "type"
+              ]
             },
             "description": "Step 3 of login: type the password."
           },
@@ -487,16 +774,29 @@
           "name": "Login Flow — Submit",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"key\": \"Enter\"\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/key",
-              "host": ["{{base_url}}"],
-              "path": ["key"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "key"
+              ]
             },
             "description": "Step 4 of login: press Enter to submit."
           },
@@ -509,8 +809,12 @@
             "header": [],
             "url": {
               "raw": "{{base_url}}/screenshot",
-              "host": ["{{base_url}}"],
-              "path": ["screenshot"]
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "screenshot"
+              ]
             },
             "description": "Step 5 of login: take a screenshot to verify the result."
           },

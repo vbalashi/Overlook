@@ -2,6 +2,8 @@ import Foundation
 import Network
 import AppKit
 import CoreImage
+import ImageIO
+import UniformTypeIdentifiers
 
 // MARK: - AgentServerManager
 
@@ -254,18 +256,28 @@ final class AgentServerManager: ObservableObject {
             return .json(["x": mx, "y": my])
 
         case ("POST", "/mouse/move"):
-            guard let body = jsonBody(req.body),
-                  let x = body["x"] as? Int, let y = body["y"] as? Int else {
-                return .error("Missing 'x' or 'y'")
+            // Accepts pixel coords (px, py) OR pre-converted HID coords (x, y)
+            guard let body = jsonBody(req.body) else {
+                return .error("Missing body")
+            }
+            let hidX: Int
+            let hidY: Int
+            if let px = asInt(body["px"]), let py = asInt(body["py"]) {
+                let (hx, hy, _, _) = pixelToHID(px: px, py: py)
+                hidX = hx; hidY = hy
+            } else if let x = asInt(body["x"]), let y = asInt(body["y"]) {
+                hidX = x; hidY = y
+            } else {
+                return .error("Missing 'px'/'py' (pixel) or 'x'/'y' (HID) coordinates")
             }
             guard let ws = inputManager?.agentWebSocketClient else {
                 return .error("Not connected", status: "503 Service Unavailable")
             }
             do {
-                try await ws.sendHidMouseMove(toX: x, toY: y)
-                inputManager?.lastMouseX = x
-                inputManager?.lastMouseY = y
-                return .json(["ok": true])
+                try await ws.sendHidMouseMove(toX: hidX, toY: hidY)
+                inputManager?.lastMouseX = hidX
+                inputManager?.lastMouseY = hidY
+                return .json(["ok": true, "hid_x": hidX, "hid_y": hidY])
             } catch {
                 return .error(error.localizedDescription, status: "500 Internal Server Error")
             }
@@ -281,6 +293,47 @@ final class AgentServerManager: ObservableObject {
                 try await Task.sleep(nanoseconds: 50_000_000)
                 try await ws.sendHidMouseButton(button: button, state: false)
                 return .json(["ok": true])
+            } catch {
+                return .error(error.localizedDescription, status: "500 Internal Server Error")
+            }
+
+        case ("POST", "/mouse/move-and-click"):
+            // Accepts pixel coords (px, py) OR pre-converted HID coords (x, y)
+            guard let body = jsonBody(req.body) else {
+                return .error("Missing body")
+            }
+            let button = body["button"] as? String ?? "left"
+            let hidX: Int
+            let hidY: Int
+            let outPx: Int
+            let outPy: Int
+            if let px = asInt(body["px"]), let py = asInt(body["py"]) {
+                // Pixel coordinates — convert to HID
+                let (hx, hy, _, _) = pixelToHID(px: px, py: py)
+                hidX = hx; hidY = hy
+                outPx = px; outPy = py
+            } else if let x = asInt(body["x"]), let y = asInt(body["y"]) {
+                // HID coordinates — reverse-convert to pixel for the response
+                hidX = x; hidY = y
+                let (fw, fh) = (webRTCManager?.currentFrame.map { CVPixelBufferGetWidth($0) } ?? 3440,
+                                webRTCManager?.currentFrame.map { CVPixelBufferGetHeight($0) } ?? 1440)
+                outPx = Int((Double(x) / 32767.0 + 1.0) / 2.0 * Double(fw))
+                outPy = Int((Double(y) / 32767.0 + 1.0) / 2.0 * Double(fh))
+            } else {
+                return .error("Provide pixel coords as 'px'/'py' or HID coords as 'x'/'y'")
+            }
+            guard let ws = inputManager?.agentWebSocketClient else {
+                return .error("Not connected", status: "503 Service Unavailable")
+            }
+            do {
+                try await ws.sendHidMouseMove(toX: hidX, toY: hidY)
+                inputManager?.lastMouseX = hidX
+                inputManager?.lastMouseY = hidY
+                try await Task.sleep(nanoseconds: 80_000_000)
+                try await ws.sendHidMouseButton(button: button, state: true)
+                try await Task.sleep(nanoseconds: 50_000_000)
+                try await ws.sendHidMouseButton(button: button, state: false)
+                return .json(["ok": true, "px": outPx, "py": outPy, "hid_x": hidX, "hid_y": hidY])
             } catch {
                 return .error(error.localizedDescription, status: "500 Internal Server Error")
             }
@@ -314,29 +367,46 @@ final class AgentServerManager: ObservableObject {
                 return .error("No video frame available", status: "503 Service Unavailable")
             }
             do {
+                let fw = CVPixelBufferGetWidth(pixelBuffer)
+                let fh = CVPixelBufferGetHeight(pixelBuffer)
                 let regions = try await ocrManager?.detectTextRegions(in: pixelBuffer) ?? []
                 let query = searchText.lowercased()
                 let matches: [[String: Any]] = regions
                     .filter { $0.text.lowercased().contains(query) }
                     .map { region in
                         let normX = region.boundingBox.midX
-                        let normY = 1.0 - region.boundingBox.midY
-                        let cx = Int((normX * 2.0 - 1.0) * 32767)
-                        let cy = Int((normY * 2.0 - 1.0) * 32767)
+                        let normY = 1.0 - region.boundingBox.midY  // flip Y: Vision origin is bottom-left
+                        let px = Int(normX * Double(fw))
+                        let py = Int(normY * Double(fh))
+                        let hidX = Int((normX * 2.0 - 1.0) * 32767)
+                        let hidY = Int((normY * 2.0 - 1.0) * 32767)
                         return ["text": region.text,
-                                "x": cx, "y": cy,
+                                "px": px, "py": py,
+                                "x": px, "y": py,      // pixel aliases for backward compatibility
+                                "hid_x": hidX, "hid_y": hidY,
                                 "confidence": Double(region.confidence)]
                     }
-                return .json(["matches": matches])
+                return .json(["matches": matches, "frame_width": fw, "frame_height": fh])
             } catch {
                 return .error(error.localizedDescription, status: "500 Internal Server Error")
             }
 
+        case ("POST", "/convert/pixel-to-hid"):
+            guard let body = jsonBody(req.body),
+                  let px = asInt(body["x"]), let py = asInt(body["y"]) else {
+                return .error("Missing 'x' or 'y'")
+            }
+            let (hx, hy, fw, fh) = pixelToHID(px: px, py: py)
+            return .json(["hid_x": hx, "hid_y": hy, "frame_width": fw, "frame_height": fh])
+
         case ("GET", "/screenshot"):
-            guard let pngData = captureScreenshot() else {
+            let qp = queryParams(from: req.path)
+            let fmt = qp["format"] ?? "png"
+            let quality = Double(qp["quality"] ?? "") ?? 0.8
+            guard let (imgData, mimeType) = captureScreenshot(format: fmt, quality: quality) else {
                 return .error("Screenshot failed", status: "500 Internal Server Error")
             }
-            return HTTPResponse(status: "200 OK", contentType: "image/png", body: pngData)
+            return HTTPResponse(status: "200 OK", contentType: mimeType, body: imgData)
 
         case ("POST", "/mcp"):
             return await handleMCP(req.body)
@@ -403,8 +473,11 @@ final class AgentServerManager: ObservableObject {
              "inputSchema": schema()],
 
             ["name": "take_screenshot",
-             "description": "Capture the current KVM video frame as a PNG image (base64-encoded)",
-             "inputSchema": schema()],
+             "description": "Capture the current KVM video frame. Supports format: jpeg (default), png, webp. Optional quality (0.0–1.0, default 0.8) applies to jpeg and webp.",
+             "inputSchema": schema([
+                "format": prop("string", "Image format: jpeg, png, or webp", ["enum": ["png", "jpeg", "webp"], "default": "jpeg"]),
+                "quality": prop("number", "Compression quality 0.0–1.0 (jpeg/webp only, default 0.8)")
+             ])],
 
             ["name": "type_text",
              "description": "Type text on the remote machine via HID",
@@ -438,7 +511,22 @@ final class AgentServerManager: ObservableObject {
 
             ["name": "find_text",
              "description": "OCR search for text on the KVM screen. Returns matches with HID coordinates usable with move_mouse.",
-             "inputSchema": schema(["text": prop("string", "Text to search for (case-insensitive)")], required: ["text"])]
+             "inputSchema": schema(["text": prop("string", "Text to search for (case-insensitive)")], required: ["text"])],
+
+            ["name": "pixel_to_hid",
+             "description": "Convert screenshot pixel coordinates (x, y) to HID mouse coordinates usable with move_mouse. Use this whenever you have a pixel position from a screenshot and need to click that location.",
+             "inputSchema": schema([
+                "x": prop("integer", "Pixel X coordinate within the screenshot"),
+                "y": prop("integer", "Pixel Y coordinate within the screenshot")
+             ], required: ["x", "y"])],
+
+            ["name": "click_at_pixel",
+             "description": "Move the mouse to a pixel coordinate from a screenshot and click. This is a single-step shortcut combining pixel_to_hid + move_mouse + click_mouse. Prefer this over calling them separately.",
+             "inputSchema": schema([
+                "x": prop("integer", "Pixel X coordinate within the screenshot"),
+                "y": prop("integer", "Pixel Y coordinate within the screenshot"),
+                "button": prop("string", "Mouse button: left, right, or middle", ["enum": ["left", "right", "middle"], "default": "left"])
+             ], required: ["x", "y"])]
         ]
     }
 
@@ -463,8 +551,10 @@ final class AgentServerManager: ObservableObject {
             return [["type": "text", "text": msg]]
 
         case "take_screenshot":
-            guard let pngData = captureScreenshot() else { throw MCPError("Screenshot failed") }
-            return [["type": "image", "data": pngData.base64EncodedString(), "mimeType": "image/png"]]
+            let fmt = args["format"] as? String ?? "jpeg"
+            let quality = (args["quality"] as? Double) ?? 0.8
+            guard let (imgData, mimeType) = captureScreenshot(format: fmt, quality: quality) else { throw MCPError("Screenshot failed") }
+            return [["type": "image", "data": imgData.base64EncodedString(), "mimeType": mimeType]]
 
         case "type_text":
             guard let text = args["text"] as? String else { throw MCPError("Missing 'text'") }
@@ -514,6 +604,25 @@ final class AgentServerManager: ObservableObject {
                 try await ws.sendHidMouseWheel(deltaX: stepsX, deltaY: stepsY)
             }
             return [["type": "text", "text": "Scrolled dx=\(dx), dy=\(dy)"]]
+
+        case "pixel_to_hid":
+            guard let px = asInt(args["x"]), let py = asInt(args["y"]) else { throw MCPError("Missing 'x' or 'y'") }
+            let (hx, hy, fw, fh) = pixelToHID(px: px, py: py)
+            return [["type": "text", "text": "Pixel (\(px), \(py)) → HID x=\(hx), y=\(hy) (frame \(fw)×\(fh))"]]
+
+        case "click_at_pixel":
+            guard let px = asInt(args["x"]), let py = asInt(args["y"]) else { throw MCPError("Missing 'x' or 'y'") }
+            let button = args["button"] as? String ?? "left"
+            guard let ws = inputManager?.agentWebSocketClient else { throw MCPError("Not connected") }
+            let (hx2, hy2, fw2, fh2) = pixelToHID(px: px, py: py)
+            try await ws.sendHidMouseMove(toX: hx2, toY: hy2)
+            inputManager?.lastMouseX = hx2
+            inputManager?.lastMouseY = hy2
+            try await Task.sleep(nanoseconds: 80_000_000)
+            try await ws.sendHidMouseButton(button: button, state: true)
+            try await Task.sleep(nanoseconds: 50_000_000)
+            try await ws.sendHidMouseButton(button: button, state: false)
+            return [["type": "text", "text": "Clicked \(button) at pixel (\(px), \(py)) → HID x=\(hx2), y=\(hy2) (frame \(fw2)×\(fh2))"]]
 
         case "find_text":
             guard let searchText = args["text"] as? String else { throw MCPError("Missing 'text'") }
@@ -573,21 +682,63 @@ final class AgentServerManager: ObservableObject {
         return nil
     }
 
-    private func captureScreenshot() -> Data? {
-        // Prefer the live KVM video frame over the Mac display
+    // Returns (imageData, mimeType). format: "png" | "jpeg" | "webp", quality: 0.0–1.0
+    private func captureScreenshot(format: String = "png", quality: Double = 0.8) -> (Data, String)? {
+        let cgImage: CGImage?
         if let pixelBuffer = webRTCManager?.currentFrame {
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-            let context = CIContext()
-            if let cgImage = context.createCGImage(ciImage, from: ciImage.extent) {
-                let rep = NSBitmapImageRep(cgImage: cgImage)
-                return rep.representation(using: .png, properties: [:])
+            cgImage = CIContext().createCGImage(ciImage, from: ciImage.extent)
+        } else {
+            cgImage = CGDisplayCreateImage(CGMainDisplayID())
+        }
+        guard let img = cgImage else { return nil }
+
+        let clampedQuality = quality.clamped(to: 0.0...1.0)
+
+        switch format.lowercased() {
+        case "jpeg", "jpg":
+            let rep = NSBitmapImageRep(cgImage: img)
+            guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: clampedQuality]) else { return nil }
+            return (data, "image/jpeg")
+        case "webp":
+            let mutableData = NSMutableData()
+            guard let dest = CGImageDestinationCreateWithData(mutableData, UTType.webP.identifier as CFString, 1, nil) else { return nil }
+            CGImageDestinationAddImage(dest, img, [kCGImageDestinationLossyCompressionQuality: clampedQuality] as CFDictionary)
+            guard CGImageDestinationFinalize(dest) else { return nil }
+            return (mutableData as Data, "image/webp")
+        default: // "png"
+            let rep = NSBitmapImageRep(cgImage: img)
+            guard let data = rep.representation(using: .png, properties: [:]) else { return nil }
+            return (data, "image/png")
+        }
+    }
+
+    // Returns (hid_x, hid_y, frame_width, frame_height).
+    // Uses live frame dimensions when available, falls back to 1920×1080.
+    private func pixelToHID(px: Int, py: Int) -> (Int, Int, Int, Int) {
+        let fw: Int
+        let fh: Int
+        if let buf = webRTCManager?.currentFrame {
+            fw = CVPixelBufferGetWidth(buf)
+            fh = CVPixelBufferGetHeight(buf)
+        } else {
+            fw = 1920; fh = 1080
+        }
+        let hx = Int((Double(px) / Double(fw) * 2.0 - 1.0) * 32767)
+        let hy = Int((Double(py) / Double(fh) * 2.0 - 1.0) * 32767)
+        return (hx, hy, fw, fh)
+    }
+
+    private func queryParams(from path: String) -> [String: String] {
+        guard let queryString = path.components(separatedBy: "?").dropFirst().first else { return [:] }
+        var params: [String: String] = [:]
+        for pair in queryString.components(separatedBy: "&") {
+            let parts = pair.components(separatedBy: "=")
+            if parts.count == 2 {
+                params[parts[0]] = parts[1].removingPercentEncoding ?? parts[1]
             }
         }
-        // Fallback: capture the Mac display
-        let displayID = CGMainDisplayID()
-        guard let cgImage = CGDisplayCreateImage(displayID) else { return nil }
-        let rep = NSBitmapImageRep(cgImage: cgImage)
-        return rep.representation(using: .png, properties: [:])
+        return params
     }
 }
 
