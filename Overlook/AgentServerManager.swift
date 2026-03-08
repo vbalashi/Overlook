@@ -338,9 +338,225 @@ final class AgentServerManager: ObservableObject {
             }
             return HTTPResponse(status: "200 OK", contentType: "image/png", body: pngData)
 
+        case ("POST", "/mcp"):
+            return await handleMCP(req.body)
+
         default:
             return .error("Not found", status: "404 Not Found")
         }
+    }
+
+    // MARK: - MCP (Model Context Protocol) — Streamable HTTP transport
+
+    private func handleMCP(_ body: Data) async -> HTTPResponse {
+        guard let rpc = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
+            return mcpError(id: nil, code: -32700, message: "Parse error")
+        }
+
+        let id = rpc["id"]
+        let method = rpc["method"] as? String ?? ""
+        let params = rpc["params"] as? [String: Any] ?? [:]
+
+        // Notifications have no id — acknowledge silently
+        if id == nil {
+            return HTTPResponse(status: "204 No Content", contentType: "application/json", body: nil)
+        }
+
+        switch method {
+        case "initialize":
+            return mcpResult(id: id, result: [
+                "protocolVersion": "2024-11-05",
+                "capabilities": ["tools": [:]],
+                "serverInfo": ["name": "overlook-kvm", "version": "1.0.0"]
+            ])
+
+        case "ping":
+            return mcpResult(id: id, result: [:])
+
+        case "tools/list":
+            return mcpResult(id: id, result: ["tools": mcpToolList()])
+
+        case "tools/call":
+            let toolName = params["name"] as? String ?? ""
+            let args = params["arguments"] as? [String: Any] ?? [:]
+            return await mcpCallTool(id: id, name: toolName, args: args)
+
+        default:
+            return mcpError(id: id, code: -32601, message: "Method not found: \(method)")
+        }
+    }
+
+    private func mcpToolList() -> [[String: Any]] {
+        func schema(_ properties: [String: Any] = [:], required: [String] = []) -> [String: Any] {
+            var s: [String: Any] = ["type": "object", "properties": properties]
+            if !required.isEmpty { s["required"] = required }
+            return s
+        }
+        func prop(_ type: String, _ description: String, _ extra: [String: Any] = [:]) -> [String: Any] {
+            var p: [String: Any] = ["type": type, "description": description]
+            p.merge(extra) { _, new in new }
+            return p
+        }
+        return [
+            ["name": "get_status",
+             "description": "Check whether Overlook is connected to a KVM device",
+             "inputSchema": schema()],
+
+            ["name": "take_screenshot",
+             "description": "Capture the current KVM video frame as a PNG image (base64-encoded)",
+             "inputSchema": schema()],
+
+            ["name": "type_text",
+             "description": "Type text on the remote machine via HID",
+             "inputSchema": schema(["text": prop("string", "The text to type")], required: ["text"])],
+
+            ["name": "press_key",
+             "description": "Press a key or shortcut on the remote machine. Examples: 'Enter', 'Escape', 'Tab', 'ctrl+c', 'meta+tab'",
+             "inputSchema": schema(["key": prop("string", "Key name or shortcut, e.g. 'Enter' or 'ctrl+c'")], required: ["key"])],
+
+            ["name": "get_mouse_position",
+             "description": "Get current mouse position in HID coordinates (-32767 to +32767, center 0,0)",
+             "inputSchema": schema()],
+
+            ["name": "move_mouse",
+             "description": "Move mouse to absolute HID coordinates. Range: -32767 (left/top) to +32767 (right/bottom), center 0,0",
+             "inputSchema": schema([
+                "x": prop("integer", "Horizontal HID position (-32767 to 32767)"),
+                "y": prop("integer", "Vertical HID position (-32767 to 32767)")
+             ], required: ["x", "y"])],
+
+            ["name": "click_mouse",
+             "description": "Click a mouse button at the current mouse position",
+             "inputSchema": schema(["button": prop("string", "Mouse button: left, right, or middle", ["enum": ["left", "right", "middle"], "default": "left"])])],
+
+            ["name": "scroll_mouse",
+             "description": "Scroll the mouse wheel at the current position",
+             "inputSchema": schema([
+                "deltaX": prop("integer", "Horizontal scroll (positive=right, negative=left)"),
+                "deltaY": prop("integer", "Vertical scroll (positive=down, negative=up)")
+             ])],
+
+            ["name": "find_text",
+             "description": "OCR search for text on the KVM screen. Returns matches with HID coordinates usable with move_mouse.",
+             "inputSchema": schema(["text": prop("string", "Text to search for (case-insensitive)")], required: ["text"])]
+        ]
+    }
+
+    private func mcpCallTool(id: Any?, name: String, args: [String: Any]) async -> HTTPResponse {
+        do {
+            let content = try await executeMCPTool(name: name, args: args)
+            return mcpResult(id: id, result: ["content": content])
+        } catch {
+            return mcpResult(id: id, result: [
+                "content": [["type": "text", "text": error.localizedDescription]],
+                "isError": true
+            ])
+        }
+    }
+
+    private func executeMCPTool(name: String, args: [String: Any]) async throws -> [[String: Any]] {
+        switch name {
+        case "get_status":
+            let connected = kvmDeviceManager?.glkvmClient != nil
+            let device = kvmDeviceManager?.connectedDevice?.name ?? "none"
+            let msg = connected ? "Connected to device: \(device)" : "Not connected to any KVM device"
+            return [["type": "text", "text": msg]]
+
+        case "take_screenshot":
+            guard let pngData = captureScreenshot() else { throw MCPError("Screenshot failed") }
+            return [["type": "image", "data": pngData.base64EncodedString(), "mimeType": "image/png"]]
+
+        case "type_text":
+            guard let text = args["text"] as? String else { throw MCPError("Missing 'text'") }
+            guard let client = kvmDeviceManager?.glkvmClient else { throw MCPError("Not connected") }
+            try await client.hidPrint(text: text)
+            return [["type": "text", "text": "Typed: \(text)"]]
+
+        case "press_key":
+            guard let key = args["key"] as? String else { throw MCPError("Missing 'key'") }
+            guard let client = kvmDeviceManager?.glkvmClient else { throw MCPError("Not connected") }
+            let keys = key.components(separatedBy: "+").map { $0.trimmingCharacters(in: .whitespaces) }
+            if keys.count > 1 {
+                try await client.sendHidShortcut(keys: keys)
+            } else {
+                try await client.sendHidKey(key: key)
+            }
+            return [["type": "text", "text": "Pressed: \(key)"]]
+
+        case "get_mouse_position":
+            let x = inputManager?.lastMouseX ?? 0
+            let y = inputManager?.lastMouseY ?? 0
+            return [["type": "text", "text": "Mouse position: x=\(x), y=\(y)"]]
+
+        case "move_mouse":
+            guard let x = asInt(args["x"]), let y = asInt(args["y"]) else { throw MCPError("Missing 'x' or 'y'") }
+            guard let ws = inputManager?.agentWebSocketClient else { throw MCPError("Not connected") }
+            try await ws.sendHidMouseMove(toX: x, toY: y)
+            inputManager?.lastMouseX = x
+            inputManager?.lastMouseY = y
+            return [["type": "text", "text": "Mouse moved to x=\(x), y=\(y)"]]
+
+        case "click_mouse":
+            let button = args["button"] as? String ?? "left"
+            guard let ws = inputManager?.agentWebSocketClient else { throw MCPError("Not connected") }
+            try await ws.sendHidMouseButton(button: button, state: true)
+            try await Task.sleep(nanoseconds: 50_000_000)
+            try await ws.sendHidMouseButton(button: button, state: false)
+            return [["type": "text", "text": "Clicked \(button) mouse button"]]
+
+        case "scroll_mouse":
+            let dx = asInt(args["deltaX"]) ?? 0
+            let dy = asInt(args["deltaY"]) ?? 0
+            guard let ws = inputManager?.agentWebSocketClient else { throw MCPError("Not connected") }
+            let stepsX = dx == 0 ? 0 : (dx > 0 ? 1 : -1)
+            let stepsY = dy == 0 ? 0 : (dy > 0 ? 1 : -1)
+            for _ in 0..<max(abs(dx), abs(dy)) {
+                try await ws.sendHidMouseWheel(deltaX: stepsX, deltaY: stepsY)
+            }
+            return [["type": "text", "text": "Scrolled dx=\(dx), dy=\(dy)"]]
+
+        case "find_text":
+            guard let searchText = args["text"] as? String else { throw MCPError("Missing 'text'") }
+            guard let pixelBuffer = webRTCManager?.currentFrame else { throw MCPError("No video frame available") }
+            let regions = try await ocrManager?.detectTextRegions(in: pixelBuffer) ?? []
+            let query = searchText.lowercased()
+            let matches = regions.filter { $0.text.lowercased().contains(query) }
+            if matches.isEmpty {
+                return [["type": "text", "text": "No matches found for: \"\(searchText)\""]]
+            }
+            let lines = matches.map { r -> String in
+                let normX = r.boundingBox.midX
+                let normY = 1.0 - r.boundingBox.midY
+                let cx = Int((normX * 2.0 - 1.0) * 32767)
+                let cy = Int((normY * 2.0 - 1.0) * 32767)
+                return "• \"\(r.text)\" at x=\(cx), y=\(cy) (confidence: \(String(format: "%.1f", r.confidence * 100))%)"
+            }
+            return [["type": "text", "text": "Found \(matches.count) match(es) for \"\(searchText)\":\n\(lines.joined(separator: "\n"))"]]
+
+        default:
+            throw MCPError("Unknown tool: \(name)")
+        }
+    }
+
+    // MARK: - MCP JSON-RPC helpers
+
+    private struct MCPError: Error {
+        let message: String
+        init(_ message: String) { self.message = message }
+    }
+
+    private func mcpResult(id: Any?, result: [String: Any]) -> HTTPResponse {
+        var rpc: [String: Any] = ["jsonrpc": "2.0", "result": result]
+        if let id { rpc["id"] = id }
+        return HTTPResponse(status: "200 OK", contentType: "application/json",
+                            body: try? JSONSerialization.data(withJSONObject: rpc))
+    }
+
+    private func mcpError(id: Any?, code: Int, message: String) -> HTTPResponse {
+        var rpc: [String: Any] = ["jsonrpc": "2.0", "error": ["code": code, "message": message]]
+        if let id { rpc["id"] = id }
+        return HTTPResponse(status: "200 OK", contentType: "application/json",
+                            body: try? JSONSerialization.data(withJSONObject: rpc))
     }
 
     // MARK: - Helpers
