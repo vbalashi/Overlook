@@ -19,11 +19,13 @@ final class AgentServerManager: ObservableObject {
     private weak var inputManager: InputManager?
     private weak var kvmDeviceManager: KVMDeviceManager?
     private weak var webRTCManager: WebRTCManager?
+    private var ocrManager: OCRManager?
 
     func setup(inputManager: InputManager, kvmDeviceManager: KVMDeviceManager, webRTCManager: WebRTCManager) {
         self.inputManager = inputManager
         self.kvmDeviceManager = kvmDeviceManager
         self.webRTCManager = webRTCManager
+        self.ocrManager = OCRManager()
         webRTCManager.setFrameCaptureEnabled(true)
     }
 
@@ -246,6 +248,11 @@ final class AgentServerManager: ObservableObject {
                 return .error(error.localizedDescription, status: "500 Internal Server Error")
             }
 
+        case ("GET", "/mouse/position"):
+            let mx = inputManager?.lastMouseX ?? 0
+            let my = inputManager?.lastMouseY ?? 0
+            return .json(["x": mx, "y": my])
+
         case ("POST", "/mouse/move"):
             guard let body = jsonBody(req.body),
                   let x = body["x"] as? Int, let y = body["y"] as? Int else {
@@ -256,6 +263,8 @@ final class AgentServerManager: ObservableObject {
             }
             do {
                 try await ws.sendHidMouseMove(toX: x, toY: y)
+                inputManager?.lastMouseX = x
+                inputManager?.lastMouseY = y
                 return .json(["ok": true])
             } catch {
                 return .error(error.localizedDescription, status: "500 Internal Server Error")
@@ -293,6 +302,32 @@ final class AgentServerManager: ObservableObject {
                     try await ws.sendHidMouseWheel(deltaX: stepsX, deltaY: stepsY)
                 }
                 return .json(["ok": true])
+            } catch {
+                return .error(error.localizedDescription, status: "500 Internal Server Error")
+            }
+
+        case ("POST", "/find-text"):
+            guard let body = jsonBody(req.body), let searchText = body["text"] as? String else {
+                return .error("Missing 'text'")
+            }
+            guard let pixelBuffer = webRTCManager?.currentFrame else {
+                return .error("No video frame available", status: "503 Service Unavailable")
+            }
+            do {
+                let regions = try await ocrManager?.detectTextRegions(in: pixelBuffer) ?? []
+                let query = searchText.lowercased()
+                let matches: [[String: Any]] = regions
+                    .filter { $0.text.lowercased().contains(query) }
+                    .map { region in
+                        let normX = region.boundingBox.midX
+                        let normY = 1.0 - region.boundingBox.midY
+                        let cx = Int((normX * 2.0 - 1.0) * 32767)
+                        let cy = Int((normY * 2.0 - 1.0) * 32767)
+                        return ["text": region.text,
+                                "x": cx, "y": cy,
+                                "confidence": Double(region.confidence)]
+                    }
+                return .json(["matches": matches])
             } catch {
                 return .error(error.localizedDescription, status: "500 Internal Server Error")
             }

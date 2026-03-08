@@ -204,6 +204,28 @@
       "name": "Mouse",
       "item": [
         {
+          "name": "Get Mouse Position",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/mouse/position",
+              "host": ["{{base_url}}"],
+              "path": ["mouse", "position"]
+            },
+            "description": "Returns the last known mouse position in HID absolute units (0–32767). Since KVM devices do not report cursor state back, this reflects the position from the most recent /mouse/move call. Defaults to center (16383, 16383) on startup."
+          },
+          "response": [
+            {
+              "name": "Position",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"x\": 16383,\n  \"y\": 16383\n}"
+            }
+          ]
+        },
+        {
           "name": "Move Mouse (Center)",
           "request": {
             "method": "POST",
@@ -212,7 +234,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"x\": 16383,\n  \"y\": 16383\n}",
+              "raw": "{\n  \"x\": 0,\n  \"y\": 0\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": {
@@ -220,7 +242,7 @@
               "host": ["{{base_url}}"],
               "path": ["mouse", "move"]
             },
-            "description": "Moves the mouse to an absolute position. Coordinates are in HID absolute units (0–32767). (0,0) = top-left, (32767,32767) = bottom-right."
+            "description": "Moves the mouse to an absolute position. Coordinates are signed HID units: range -32767 to +32767. (0,0) = center, (-32767,-32767) = top-left, (32767,32767) = bottom-right."
           },
           "response": []
         },
@@ -344,7 +366,7 @@
               "host": ["{{base_url}}"],
               "path": ["screenshot"]
             },
-            "description": "Captures the host Mac's screen and returns a PNG image. Use this for visual feedback after performing actions."
+            "description": "Captures the live KVM video frame and returns a PNG image (falls back to Mac display if no frame is available). Use for visual feedback after performing actions."
           },
           "response": [
             {
@@ -353,6 +375,49 @@
               "code": 200,
               "header": [{ "key": "Content-Type", "value": "image/png" }],
               "body": ""
+            }
+          ]
+        },
+        {
+          "name": "Find Text (OCR)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Login\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/find-text",
+              "host": ["{{base_url}}"],
+              "path": ["find-text"]
+            },
+            "description": "Runs OCR on the current KVM video frame and returns all regions whose text contains the search string (case-insensitive).\n\nHID coordinates (x, y, width, height): signed range -32767 (top-left) to +32767 (bottom-right), center = 0. Use x/y directly with /mouse/move.\n\nPixel coordinates (px, py, pw, ph): position within the video frame, same coordinate space as /screenshot.\n\nHID formula: x = (px / frame_width * 2 - 1) * 32767"
+          },
+          "response": [
+            {
+              "name": "Matches Found",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"matches\": [\n    {\n      \"text\": \"Login\",\n      \"x\": -3200,\n      \"y\": -10500,\n      \"confidence\": 0.98\n    }\n  ]\n}"
+            },
+            {
+              "name": "No Matches",
+              "status": "OK",
+              "code": 200,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"matches\": []\n}"
+            },
+            {
+              "name": "No Video Frame",
+              "status": "Service Unavailable",
+              "code": 503,
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "body": "{\n  \"error\": \"No video frame available\"\n}"
             }
           ]
         }

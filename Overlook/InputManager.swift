@@ -33,6 +33,8 @@ class InputManager: ObservableObject {
     
     @Published var isKeyboardCaptureEnabled = false
     @Published var isMouseCaptureEnabled = false
+    @Published var lastMouseX: Int = 0
+    @Published var lastMouseY: Int = 0
 
     var reverseScrollDirection: Bool {
         get { UserDefaults.standard.bool(forKey: "overlook.input.reverseScroll") }
@@ -108,6 +110,10 @@ class InputManager: ObservableObject {
 
                 if snapshot.mode == .glkvmWebSocket, let ws = snapshot.ws {
                     try? await ws.sendHidMouseMove(toX: move.toX, toY: move.toY)
+                    await MainActor.run {
+                        self.lastMouseX = move.toX
+                        self.lastMouseY = move.toY
+                    }
                 }
 
                 try? await Task.sleep(nanoseconds: sendIntervalNs)
@@ -472,6 +478,8 @@ class InputManager: ObservableObject {
             let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
             Task {
                 try? await ws.sendHidMouseMove(toX: toX, toY: toY)
+                self.lastMouseX = toX
+                self.lastMouseY = toY
                 try? await ws.sendHidMouseButton(button: button, state: event.isDown)
             }
             return
@@ -496,6 +504,8 @@ class InputManager: ObservableObject {
             let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
             Task {
                 try? await ws.sendHidMouseMove(toX: toX, toY: toY)
+                self.lastMouseX = toX
+                self.lastMouseY = toY
             }
             return
         }
