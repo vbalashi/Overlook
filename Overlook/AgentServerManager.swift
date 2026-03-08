@@ -24,6 +24,7 @@ final class AgentServerManager: ObservableObject {
         self.inputManager = inputManager
         self.kvmDeviceManager = kvmDeviceManager
         self.webRTCManager = webRTCManager
+        webRTCManager.setFrameCaptureEnabled(true)
     }
 
     // MARK: - API Key
@@ -323,7 +324,6 @@ final class AgentServerManager: ObservableObject {
 
     private func captureScreenshot() -> Data? {
         // Prefer the live KVM video frame over the Mac display
-        webRTCManager?.setFrameCaptureEnabled(true)
         if let pixelBuffer = webRTCManager?.currentFrame {
             let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
             let context = CIContext()

@@ -1466,12 +1466,6 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
 
         guard isFrameCaptureEnabled else { return }
 
-        let minInterval: CFTimeInterval = 1.0 / 12.0
-        if now - lastFrameCaptureTime < minInterval {
-            return
-        }
-        lastFrameCaptureTime = now
-
         if let cvBuffer = frame.buffer as? RTCCVPixelBuffer {
             let pb = cvBuffer.pixelBuffer
             Task { @MainActor in
