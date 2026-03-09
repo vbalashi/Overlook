@@ -184,7 +184,7 @@ struct ContentView: View {
                                 Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
                             }
                             .disabled(!isConnected)
-                            .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+                            .help(isOCRModeEnabled ? "Disable OCR Selection (⌘⇧C)" : "Enable OCR Selection (⌘⇧C)")
 
                             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
                                 Image(systemName: "gearshape")
@@ -391,7 +391,7 @@ struct ContentView: View {
                         Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
                     }
                     .disabled(!isConnected)
-                    .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+                    .help(isOCRModeEnabled ? "Disable OCR Selection (⌘⇧C)" : "Enable OCR Selection (⌘⇧C)")
 
                     Button(action: { showingQuickPaste.toggle() }) {
                         Image(systemName: "bolt.fill")

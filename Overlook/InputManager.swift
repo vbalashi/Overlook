@@ -239,7 +239,7 @@ class InputManager: ObservableObject {
             }
 
             if isKeyDown, modifiers.contains(.command) {
-                if keyCode == 8 {
+                if keyCode == 8, modifiers.contains(.shift) {
                     prepareForLocalCommandShortcut()
                     suppressedKeyUps.insert(keyCode)
                     NotificationCenter.default.post(name: .overlookToggleCopyMode, object: nil)

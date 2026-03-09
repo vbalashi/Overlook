@@ -21,6 +21,7 @@ struct VideoSurfaceView: View {
     @State private var ocrDragStart: CGPoint?
     @State private var ocrDragCurrent: CGPoint?
     @State private var ocrRegionsTask: Task<Void, Never>?
+    @State private var mousePixelCoords: String = ""
 
     private var ocrSelectionRect: CGRect? {
         guard let start = ocrDragStart, let current = ocrDragCurrent else { return nil }
@@ -42,11 +43,20 @@ struct VideoSurfaceView: View {
                         videoView: videoView,
                         onMouseMove: { pointInView in
                             guard !isOCRModeEnabled else { return }
+                            let vs = currentVideoSize()
                             inputManager.handleVideoMouseMove(
                                 pointInView: pointInView,
                                 viewSize: geometry.size,
-                                videoSize: currentVideoSize()
+                                videoSize: vs
                             )
+                            let norm = inputManager.normalizePointInViewToVideo(pointInView: pointInView, viewSize: geometry.size, videoSize: vs)
+                            if let buf = webRTCManager.currentFrame {
+                                let fw = CVPixelBufferGetWidth(buf)
+                                let fh = CVPixelBufferGetHeight(buf)
+                                let px = Int(norm.x * Double(fw))
+                                let py = Int(norm.y * Double(fh))
+                                mousePixelCoords = "px:\(px) py:\(py)"
+                            }
                         },
                         onMouseButton: { button, isDown, pointInView in
                             guard !isOCRModeEnabled else { return }
@@ -140,6 +150,24 @@ struct VideoSurfaceView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding()
+                }
+
+                // Mouse pixel coordinate overlay
+                if !mousePixelCoords.isEmpty {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Text(mousePixelCoords)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Color.black.opacity(0.6))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .padding(8)
+                        }
+                    }
                 }
             }
         }

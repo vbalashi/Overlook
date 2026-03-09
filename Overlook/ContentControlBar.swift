@@ -67,7 +67,7 @@ struct ContentControlBar: View {
                 Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
             }
             .disabled(!isConnected)
-            .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+            .help(isOCRModeEnabled ? "Disable OCR Selection (⌘⇧C)" : "Enable OCR Selection (⌘⇧C)")
 
             Button(action: onToggleConnection) {
                 Image(systemName: isConnected ? "personalhotspot.slash" : "personalhotspot")

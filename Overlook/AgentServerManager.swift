@@ -399,9 +399,39 @@ final class AgentServerManager: ObservableObject {
             let (hx, hy, fw, fh) = pixelToHID(px: px, py: py)
             return .json(["hid_x": hx, "hid_y": hy, "frame_width": fw, "frame_height": fh])
 
+        case ("GET", "/status/globalprotect"):
+            guard let pixelBuffer = webRTCManager?.currentFrame else {
+                return .error("No video frame available", status: "503 Service Unavailable")
+            }
+            guard let ws = inputManager?.agentWebSocketClient else {
+                return .error("Not connected", status: "503 Service Unavailable")
+            }
+            let fw = CVPixelBufferGetWidth(pixelBuffer)
+            let menuBarY = 15
+            // Scan right-to-left across the menu bar in 22px steps
+            let scanPositions = stride(from: fw - 30, through: fw - 500, by: -22).map { $0 }
+            for scanX in scanPositions {
+                let (hx, hy, _, _) = pixelToHID(px: scanX, py: menuBarY)
+                try? await ws.sendHidMouseMove(toX: hx, toY: hy)
+                try? await Task.sleep(nanoseconds: 120_000_000) // 120ms for tooltip
+                guard let frame = webRTCManager?.currentFrame else { continue }
+                let regions = (try? await ocrManager?.detectTextRegions(in: frame)) ?? []
+                // Look for "GlobalProtect" in tooltip text
+                if let match = regions.first(where: { $0.text.localizedCaseInsensitiveContains("GlobalProtect") }) {
+                    // Extract status: everything after "GlobalProtect"
+                    let fullText = regions
+                        .filter { $0.boundingBox.minY > 0.9 || $0.boundingBox.maxX > 0.7 } // tooltip is top-right area
+                        .map { $0.text }.joined(separator: " ")
+                    let status = match.text
+                    return .json(["status": status, "found": true, "px": scanX, "py": menuBarY,
+                                  "hid_x": hx, "hid_y": hy, "tooltip_text": fullText])
+                }
+            }
+            return .json(["status": "not_found", "found": false])
+
         case ("GET", "/screenshot"):
             let qp = queryParams(from: req.path)
-            let fmt = qp["format"] ?? "png"
+            let fmt = qp["format"] ?? "jpeg"
             let quality = Double(qp["quality"] ?? "") ?? 0.8
             guard let (imgData, mimeType) = captureScreenshot(format: fmt, quality: quality) else {
                 return .error("Screenshot failed", status: "500 Internal Server Error")
@@ -473,9 +503,9 @@ final class AgentServerManager: ObservableObject {
              "inputSchema": schema()],
 
             ["name": "take_screenshot",
-             "description": "Capture the current KVM video frame. Supports format: jpeg (default), png, webp. Optional quality (0.0–1.0, default 0.8) applies to jpeg and webp.",
+             "description": "Capture the current KVM video frame at full resolution. Supports format: jpeg (default), png. Optional quality (0.0–1.0, default 0.8) applies to jpeg. Pixel coordinates in the returned image map directly to pixel_to_hid inputs.",
              "inputSchema": schema([
-                "format": prop("string", "Image format: jpeg, png, or webp", ["enum": ["png", "jpeg", "webp"], "default": "jpeg"]),
+                "format": prop("string", "Image format: jpeg or png", ["enum": ["png", "jpeg"], "default": "jpeg"]),
                 "quality": prop("number", "Compression quality 0.0–1.0 (jpeg/webp only, default 0.8)")
              ])],
 
@@ -526,7 +556,11 @@ final class AgentServerManager: ObservableObject {
                 "x": prop("integer", "Pixel X coordinate within the screenshot"),
                 "y": prop("integer", "Pixel Y coordinate within the screenshot"),
                 "button": prop("string", "Mouse button: left, right, or middle", ["enum": ["left", "right", "middle"], "default": "left"])
-             ], required: ["x", "y"])]
+             ], required: ["x", "y"])],
+
+            ["name": "get_globalprotect_status",
+             "description": "Scan the macOS menu bar to find the GlobalProtect VPN icon and return its connectivity status (e.g. Connected, Connecting, Disconnected). No hardcoded position — discovers the icon dynamically.",
+             "inputSchema": schema()]
         ]
     }
 
@@ -642,6 +676,25 @@ final class AgentServerManager: ObservableObject {
             }
             return [["type": "text", "text": "Found \(matches.count) match(es) for \"\(searchText)\":\n\(lines.joined(separator: "\n"))"]]
 
+        case "get_globalprotect_status":
+            guard let pixelBuffer = webRTCManager?.currentFrame else { throw MCPError("No video frame available") }
+            guard let ws = inputManager?.agentWebSocketClient else { throw MCPError("Not connected") }
+            let fw = CVPixelBufferGetWidth(pixelBuffer)
+            let menuBarY = 15
+            for scanX in stride(from: fw - 30, through: fw - 700, by: -22) {
+                let (hx, hy, _, _) = pixelToHID(px: scanX, py: menuBarY)
+                try await ws.sendHidMouseMove(toX: hx, toY: hy)
+                inputManager?.lastMouseX = hx; inputManager?.lastMouseY = hy
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let frame = webRTCManager?.currentFrame else { continue }
+                let regions = (try? await ocrManager?.detectTextRegions(in: frame)) ?? []
+                if let match = regions.first(where: { $0.text.localizedCaseInsensitiveContains("GlobalProtect") }) {
+                    let tooltip = regions.map { $0.text }.joined(separator: " ")
+                    return [["type": "text", "text": "GlobalProtect status: \(match.text)\nFull tooltip: \(tooltip)\nIcon at px:\(scanX) py:\(menuBarY) (HID x:\(hx) y:\(hy))"]]
+                }
+            }
+            return [["type": "text", "text": "GlobalProtect icon not found in menu bar"]]
+
         default:
             throw MCPError("Unknown tool: \(name)")
         }
@@ -701,9 +754,17 @@ final class AgentServerManager: ObservableObject {
             guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: clampedQuality]) else { return nil }
             return (data, "image/jpeg")
         case "webp":
+            // Normalize to RGB (no alpha) bitmap to ensure CGImageDestination WebP compatibility
+            let w = img.width, h = img.height
+            guard let ctx = CGContext(data: nil, width: w, height: h,
+                                      bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+            guard let normalised = ctx.makeImage() else { return nil }
             let mutableData = NSMutableData()
             guard let dest = CGImageDestinationCreateWithData(mutableData, UTType.webP.identifier as CFString, 1, nil) else { return nil }
-            CGImageDestinationAddImage(dest, img, [kCGImageDestinationLossyCompressionQuality: clampedQuality] as CFDictionary)
+            CGImageDestinationAddImage(dest, normalised, [kCGImageDestinationLossyCompressionQuality: clampedQuality] as CFDictionary)
             guard CGImageDestinationFinalize(dest) else { return nil }
             return (mutableData as Data, "image/webp")
         default: // "png"
