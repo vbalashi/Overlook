@@ -320,14 +320,16 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { note in
             guard let window = note.object as? NSWindow else { return }
-            guard windowRef === window else { return }
+            windowRef = window
+            window.toolbar?.isVisible = false
             isFullscreen = true
             showFullscreenControls = false
             fullscreenControlsDismissedUntilMouseExit = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
             guard let window = note.object as? NSWindow else { return }
-            guard windowRef === window else { return }
+            windowRef = window
+            window.toolbar?.isVisible = true
             isFullscreen = false
             showFullscreenControls = false
             fullscreenControlsDismissedUntilMouseExit = false
@@ -388,12 +390,6 @@ struct ContentView: View {
                         Image(systemName: "personalhotspot")
                     }
                     .help("Connections")
-
-                    Button(action: { fitWindowToGuest() }) {
-                        Image(systemName: "arrow.up.left.and.arrow.down.right")
-                    }
-                    .disabled(webRTCManager.videoSize == nil)
-                    .help("Fit window to guest")
 
                     Button(action: { showingQuickPaste.toggle() }) {
                         Image(systemName: "bolt.fill")
