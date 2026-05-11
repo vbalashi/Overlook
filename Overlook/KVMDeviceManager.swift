@@ -791,9 +791,8 @@ final class KVMDeviceManager: NSObject, ObservableObject {
     
     private func removeDuplicates(from devices: [KVMDevice]) -> [KVMDevice] {
         // Pinned (manual/saved) entries always appear with their exact host:port.
-        // Discovered entries collapse per host:port, and additionally surface
-        // when a host has a discovered port that isn't already pinned — so a
-        // saved :80 entry doesn't hide a freshly-discovered :443 entry.
+        // Discovered entries collapse per host so HTTP redirects and HTTPS
+        // endpoints for the same GLKVM do not show up as separate devices.
         func portRank(_ port: Int) -> Int {
             switch port {
             case 443: return 0
@@ -806,7 +805,7 @@ final class KVMDeviceManager: NSObject, ObservableObject {
 
         var pinned: [KVMDevice] = []
         var pinnedKeys: Set<String> = []
-        var bestDiscoveredPerKey: [String: KVMDevice] = [:]
+        var bestDiscoveredPerHost: [String: KVMDevice] = [:]
         var pinnedHostPorts: [String: Set<Int>] = [:]
 
         for device in devices {
@@ -818,18 +817,18 @@ final class KVMDeviceManager: NSObject, ObservableObject {
                     pinnedHostPorts[device.host, default: []].insert(device.port)
                 }
             } else {
-                if let existing = bestDiscoveredPerKey[key] {
+                if let existing = bestDiscoveredPerHost[device.host] {
                     if portRank(device.port) < portRank(existing.port) {
-                        bestDiscoveredPerKey[key] = device
+                        bestDiscoveredPerHost[device.host] = device
                     }
                 } else {
-                    bestDiscoveredPerKey[key] = device
+                    bestDiscoveredPerHost[device.host] = device
                 }
             }
         }
 
         var result = pinned
-        for device in bestDiscoveredPerKey.values {
+        for device in bestDiscoveredPerHost.values {
             let key = "\(device.host):\(device.port)"
             if pinnedKeys.contains(key) { continue }
             // Also skip a discovered entry if a pinned entry for the same host
