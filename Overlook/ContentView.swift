@@ -39,6 +39,7 @@ struct ContentView: View {
 
     @State private var isFullscreen: Bool = false
     @State private var showFullscreenControls: Bool = false
+    @State private var fullscreenControlsDismissedUntilMouseExit: Bool = false
     @State private var fullscreenHoverTask: Task<Void, Never>?
 
     @AppStorage("overlook.appAppearance") private var appAppearance: String = "system"
@@ -139,15 +140,17 @@ struct ContentView: View {
                         .onHover { hovering in
                             fullscreenHoverTask?.cancel()
                             if hovering {
+                                guard fullscreenControlsDismissedUntilMouseExit == false else { return }
                                 fullscreenHoverTask = Task { @MainActor in
                                     try? await Task.sleep(nanoseconds: 350_000_000)
-                                    if isFullscreen {
+                                    if isFullscreen, fullscreenControlsDismissedUntilMouseExit == false {
                                         withAnimation(.easeInOut(duration: 0.15)) {
                                             showFullscreenControls = true
                                         }
                                     }
                                 }
                             } else {
+                                fullscreenControlsDismissedUntilMouseExit = false
                                 withAnimation(.easeInOut(duration: 0.15)) {
                                     showFullscreenControls = false
                                 }
@@ -160,12 +163,6 @@ struct ContentView: View {
                                 Image(systemName: "personalhotspot")
                             }
                             .help("Connections")
-
-                            Button(action: { fitWindowToGuest() }) {
-                                Image(systemName: "arrow.up.left.and.arrow.down.right")
-                            }
-                            .disabled(webRTCManager.videoSize == nil)
-                            .help("Fit window to guest")
 
                             Button(action: { showingQuickPaste.toggle() }) {
                                 Image(systemName: "bolt.fill")
@@ -193,6 +190,17 @@ struct ContentView: View {
                             }
                             .disabled(!isConnected)
                             .help("Settings")
+
+                            Button(action: {
+                                fullscreenHoverTask?.cancel()
+                                fullscreenControlsDismissedUntilMouseExit = true
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    showFullscreenControls = false
+                                }
+                            }) {
+                                Image(systemName: "chevron.up")
+                            }
+                            .help("Hide fullscreen controls")
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
@@ -308,18 +316,21 @@ struct ContentView: View {
         .onChange(of: windowRef) { _, newValue in
             isFullscreen = newValue?.styleMask.contains(.fullScreen) ?? false
             showFullscreenControls = false
+            fullscreenControlsDismissedUntilMouseExit = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { note in
             guard let window = note.object as? NSWindow else { return }
             guard windowRef === window else { return }
             isFullscreen = true
             showFullscreenControls = false
+            fullscreenControlsDismissedUntilMouseExit = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
             guard let window = note.object as? NSWindow else { return }
             guard windowRef === window else { return }
             isFullscreen = false
             showFullscreenControls = false
+            fullscreenControlsDismissedUntilMouseExit = false
         }
         .onReceive(kvmDeviceManager.$glkvmClient) { client in
             inputManager.setGLKVMClient(client)
@@ -661,7 +672,7 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let window = nsView.window else { return }
 
-        if context.coordinator.didConfigureWindow == false {
+        if context.coordinator.window !== window {
             context.coordinator.didConfigureWindow = true
             let coordinator = context.coordinator
             DispatchQueue.main.async {
@@ -731,6 +742,7 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
                 return
             }
 
+            detach()
             self.window = window
             forwardedDelegate = window.delegate
             window.delegate = self
@@ -741,6 +753,18 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
                 storedWindowedTitleVisibility = window.titleVisibility
                 storedWindowedToolbarIsVisible = window.toolbar?.isVisible
             }
+        }
+
+        func detach() {
+            if let window, window.delegate === self {
+                window.delegate = forwardedDelegate
+            }
+            self.window = nil
+            forwardedDelegate = nil
+        }
+
+        deinit {
+            detach()
         }
 
         private func applyFullscreenChrome(window: NSWindow) {
@@ -797,17 +821,6 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
 }
 
 extension WindowAspectRatioSetter.Coordinator: NSWindowDelegate {
-    override func responds(to aSelector: Selector!) -> Bool {
-        if super.responds(to: aSelector) {
-            return true
-        }
-        return forwardedDelegate?.responds(to: aSelector) ?? false
-    }
-
-    override func forwardingTarget(for aSelector: Selector!) -> Any? {
-        forwardedDelegate
-    }
-
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         guard let aspect = videoAspect else { return frameSize }
 
@@ -840,6 +853,15 @@ extension WindowAspectRatioSetter.Coordinator: NSWindowDelegate {
         }
 
         return constrained
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        forwardedDelegate?.windowDidResize?(notification)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        forwardedDelegate?.windowWillClose?(notification)
+        detach()
     }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
