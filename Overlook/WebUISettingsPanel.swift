@@ -540,6 +540,24 @@ struct WebUISettingsPanel: View {
                                 set: { inputManager.reverseScrollDirection = $0 }
                             ))
 
+                            HStack {
+                                Text("Local scroll speed")
+                                Spacer()
+                                Slider(
+                                    value: Binding(
+                                        get: { inputManager.localScrollScale },
+                                        set: { inputManager.localScrollScale = $0 }
+                                    ),
+                                    in: 0.05...1.0,
+                                    step: 0.05
+                                )
+                                .frame(width: 150)
+                                Text("\(inputManager.localScrollScale, specifier: "%.2f")x")
+                                    .foregroundStyle(.secondary)
+                                    .monospacedDigit()
+                                    .frame(width: 44, alignment: .trailing)
+                            }
+
                             Toggle("Mouse Jiggle", isOn: bindingBool(
                                 get: { $0.mouseJiggle },
                                 set: { $0.mouseJiggle = $1 },
@@ -1175,7 +1193,11 @@ struct WebUISettingsPanel: View {
     private func scheduleApply(_ config: GLKVMSystemConfig) {
         applyTask?.cancel()
         applyTask = Task {
-            try? await Task.sleep(nanoseconds: 150_000_000)
+            do {
+                try await Task.sleep(nanoseconds: 350_000_000)
+            } catch {
+                return
+            }
             await apply(config)
         }
     }
@@ -1190,6 +1212,19 @@ struct WebUISettingsPanel: View {
                 isApplying = false
             }
         } catch {
+            if error is CancellationError {
+                await MainActor.run {
+                    isApplying = false
+                }
+                return
+            }
+            if (error as NSError).domain == NSURLErrorDomain,
+               (error as NSError).code == NSURLErrorCancelled {
+                await MainActor.run {
+                    isApplying = false
+                }
+                return
+            }
             await MainActor.run {
                 isApplying = false
                 recordError("Failed to apply settings: \(error)")

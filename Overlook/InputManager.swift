@@ -39,6 +39,8 @@ class InputManager: ObservableObject {
     private var passthroughKeyCodes: Set<UInt16> = []
     private var remotePressedModifierKeyCodes: Set<UInt16> = []
     private var locallySuppressedModifierKeyCodes: Set<UInt16> = []
+    private var scrollRemainderX: CGFloat = 0
+    private var scrollRemainderY: CGFloat = 0
     private static let commandModifierKeyCodes: Set<UInt16> = [55, 54]
     private static let releasableLocalShortcutModifierKeyCodes: Set<UInt16> = [56, 60, 58, 61, 59, 62]
     
@@ -51,6 +53,18 @@ class InputManager: ObservableObject {
     var reverseScrollDirection: Bool {
         get { UserDefaults.standard.bool(forKey: "overlook.input.reverseScroll") }
         set { UserDefaults.standard.set(newValue, forKey: "overlook.input.reverseScroll") }
+    }
+
+    var localScrollScale: Double {
+        get {
+            let stored = UserDefaults.standard.double(forKey: "overlook.input.localScrollScale")
+            return stored > 0 ? stored : 0.25
+        }
+        set {
+            let clamped = min(max(newValue, 0.05), 2.0)
+            objectWillChange.send()
+            UserDefaults.standard.set(clamped, forKey: "overlook.input.localScrollScale")
+        }
     }
 
     init() {
@@ -806,8 +820,17 @@ class InputManager: ObservableObject {
     private func sendMouseScrollEvent(_ event: MouseScrollEvent) {
         if transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
             let multiplier: CGFloat = reverseScrollDirection ? -1 : 1
-            let dx = clampInt(Int((event.deltaX * multiplier).rounded()), min: -127, max: 127)
-            let dy = clampInt(Int((event.deltaY * multiplier).rounded()), min: -127, max: 127)
+            scrollRemainderX += event.deltaX * CGFloat(localScrollScale) * multiplier
+            scrollRemainderY += event.deltaY * CGFloat(localScrollScale) * multiplier
+
+            let dx = clampInt(Int(scrollRemainderX.rounded(.towardZero)), min: -127, max: 127)
+            let dy = clampInt(Int(scrollRemainderY.rounded(.towardZero)), min: -127, max: 127)
+
+            guard dx != 0 || dy != 0 else { return }
+
+            scrollRemainderX -= CGFloat(dx)
+            scrollRemainderY -= CGFloat(dy)
+
             Task {
                 try? await ws.sendHidMouseWheel(deltaX: dx, deltaY: dy)
             }
