@@ -207,17 +207,15 @@ enabled. A small local whitelist keeps common Mac shortcuts working.
 
 - `⌘⇧C`: start the one-shot snippet OCR described above.
 - `⌘⇧V`: type the Mac clipboard into the remote via HID.
-- `⌘⇧` + any other key: stays local (not forwarded).
-- `⌘Tab`: macOS app switcher.
-- `⌥Tab`: passes through locally (useful with third-party window
-  switchers).
 - `Escape` while the snippet overlay is showing: cancel without OCR.
 
 ### Forwarded to the remote
 
 Everything else, including `⌘C`, `⌘V`, `⌘Q`, `⌘W`, `⌘H`, `⌘M`, and so
-on. If you need to quit Overlook via the keyboard, either disable input
-capture first (open the Settings panel) or use `⌘⌥Esc` to force-quit.
+on. `⌘` is forwarded as the remote Meta/Windows key, and `⌥Tab` is
+forwarded as remote `Alt+Tab`. `⌘⇧S` reaches Windows as `Win+Shift+S` for the
+snipping shortcut. If you need to quit Overlook via the keyboard, either disable
+input capture first (open the Settings panel) or use `⌘⌥Esc` to force-quit.
 
 ### Menu bar global shortcuts
 

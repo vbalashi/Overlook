@@ -36,6 +36,7 @@ done
 cd "$(dirname "$0")"
 
 DEST_DIR="build/$(echo "$CONFIG" | tr '[:upper:]' '[:lower:]')"
+APP_NAME="Overlook.app"
 
 run_xcodebuild() {
   xcodebuild \
@@ -43,6 +44,21 @@ run_xcodebuild() {
     -scheme Overlook \
     -configuration "$CONFIG" \
     "$@"
+}
+
+cleanup_derived_data_apps() {
+  local app
+  local derived_data="$HOME/Library/Developer/Xcode/DerivedData"
+
+  [[ -d "$derived_data" ]] || return 0
+
+  while IFS= read -r app; do
+    [[ -n "$app" ]] || continue
+    if [[ -x "$LSREGISTER" ]]; then
+      "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
+    fi
+    rm -rf "$app"
+  done < <(find "$derived_data" -path "*/Build/Products/*/$APP_NAME" -type d -prune 2>/dev/null)
 }
 
 echo "Building Overlook ($CONFIG)..."
@@ -74,8 +90,6 @@ if [[ -x "$LSREGISTER" ]]; then
   "$LSREGISTER" -f -R -trusted "$DEST_DIR/$FULL_PRODUCT_NAME"
 fi
 
-if [[ "$APP_SRC" != "$PWD/$DEST_DIR/$FULL_PRODUCT_NAME" ]]; then
-  rm -rf "$APP_SRC"
-fi
+cleanup_derived_data_apps
 
 echo "Copied $FULL_PRODUCT_NAME -> $DEST_DIR/"

@@ -62,9 +62,11 @@ Check:
 - `Cmd+C` reaches remote copy.
 - `Cmd+V` reaches remote paste.
 - `Cmd+Shift+C` enters snippet OCR mode locally.
+- `Cmd+Shift+S` reaches the remote as `Meta+Shift+S` and opens Windows snipping.
 - `Esc` exits snippet OCR mode.
-- `Cmd+Tab` remains local app switching behavior if it is allow-listed.
-- `Option+Tab` behavior should be verified explicitly on EU/UK keyboards.
+- `Cmd` alone opens the remote Windows Start menu.
+- `Cmd+Tab` reaches the remote as `Meta+Tab`.
+- `Option+Tab` reaches the remote as `Alt+Tab`; verify explicitly on EU/UK keyboards.
 - Releasing modifier keys after a local shortcut does not leave Shift/Command stuck on the remote.
 
 Expected:

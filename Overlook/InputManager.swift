@@ -412,9 +412,15 @@ class InputManager: ObservableObject {
         case "MetaLeft", "MetaRight":
             isDown = flags.contains(.command)
             if isDown {
-                pendingCommandKeyCode = keyCode
-                activeCommandKeyCode = nil
-                commandKeySentToRemote = false
+                pendingCommandKeyCode = nil
+                activeCommandKeyCode = keyCode
+                commandKeySentToRemote = true
+                sendTrackedModifierKeyEvent(
+                    keyCode: keyCode,
+                    isDown: true,
+                    modifiers: flags,
+                    timestamp: event.timestamp
+                )
                 return
             }
 
@@ -451,7 +457,6 @@ class InputManager: ObservableObject {
 
     private func localActionFor(keyCode: UInt16,
                                 modifiers: NSEvent.ModifierFlags) -> LocalKeyAction? {
-        let tabKeyCode: UInt16 = 48
         let cKeyCode: UInt16 = 8
         let vKeyCode: UInt16 = 9
 
@@ -460,14 +465,6 @@ class InputManager: ObservableObject {
         let option = modifiers.contains(.option)
         let control = modifiers.contains(.control)
 
-        if keyCode == tabKeyCode, cmd, !shift, !control, !option {
-            return .passthrough
-        }
-
-        if keyCode == tabKeyCode, option, !cmd, !shift, !control {
-            return .passthrough
-        }
-
         if cmd, shift {
             if !option, !control, keyCode == vKeyCode {
                 return .pasteClipboard
@@ -475,7 +472,6 @@ class InputManager: ObservableObject {
             if !option, !control, keyCode == cKeyCode {
                 return .startSnippet
             }
-            return .passthrough
         }
 
         return nil
