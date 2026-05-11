@@ -7,8 +7,10 @@ import Combine
 @MainActor
 class OCRManager: ObservableObject {
     @Published var isProcessing = false
+    @Published var recognizedRegions: [TextRegion] = []
 
     nonisolated(unsafe) private var textRecognitionRequest: VNRecognizeTextRequest?
+    nonisolated(unsafe) private var textObservationRequest: VNRecognizeTextRequest?
     nonisolated(unsafe) private var ocrQueue = DispatchQueue(label: "com.overlook.ocr", qos: .userInitiated)
 
     init() {
@@ -21,6 +23,12 @@ class OCRManager: ObservableObject {
         textRecognitionRequest?.usesLanguageCorrection = true
         textRecognitionRequest?.recognitionLanguages = ["en-US", "en-GB"]
         textRecognitionRequest?.automaticallyDetectsLanguage = true
+
+        textObservationRequest = VNRecognizeTextRequest()
+        textObservationRequest?.recognitionLevel = .fast
+        textObservationRequest?.usesLanguageCorrection = false
+        textObservationRequest?.recognitionLanguages = ["en-US", "en-GB"]
+        textObservationRequest?.automaticallyDetectsLanguage = true
     }
 
     func recognizeTextInRegion(_ region: CGRect, in pixelBuffer: CVPixelBuffer?) async throws -> String {
@@ -35,6 +43,51 @@ class OCRManager: ObservableObject {
                     continuation.resume(with: result)
                 }
             }
+        }
+    }
+
+    func detectTextRegions(in pixelBuffer: CVPixelBuffer?) async throws -> [TextRegion] {
+        guard let pixelBuffer = pixelBuffer else {
+            throw OCRError.noVideoFrame
+        }
+
+        let pixelBufferBox = PixelBufferBox(pixelBuffer)
+        return try await withCheckedThrowingContinuation { continuation in
+            ocrQueue.async { [weak self] in
+                self?.performTextDetection(in: pixelBufferBox.pixelBuffer) { result in
+                    continuation.resume(with: result)
+                }
+            }
+        }
+    }
+
+    nonisolated private func performTextDetection(in pixelBuffer: CVPixelBuffer, completion: @escaping (Result<[TextRegion], Error>) -> Void) {
+        guard let request = textObservationRequest else {
+            completion(.failure(OCRError.requestNotInitialized))
+            return
+        }
+
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
+
+        do {
+            try handler.perform([request])
+
+            let regions = (request.results ?? []).compactMap { observation -> TextRegion? in
+                guard let candidate = observation.topCandidates(1).first else { return nil }
+                return TextRegion(
+                    text: candidate.string,
+                    boundingBox: observation.boundingBox,
+                    confidence: candidate.confidence
+                )
+            }
+
+            Task { @MainActor in
+                self.recognizedRegions = regions
+            }
+
+            completion(.success(regions))
+        } catch {
+            completion(.failure(error))
         }
     }
 
@@ -123,6 +176,20 @@ class OCRManager: ObservableObject {
         context.render(croppedImage, to: outputBuffer)
 
         return outputBuffer
+    }
+}
+
+struct TextRegion: Identifiable, Codable {
+    let id: UUID
+    let text: String
+    let boundingBox: CGRect
+    let confidence: Float
+
+    init(id: UUID = UUID(), text: String, boundingBox: CGRect, confidence: Float) {
+        self.id = id
+        self.text = text
+        self.boundingBox = boundingBox
+        self.confidence = confidence
     }
 }
 

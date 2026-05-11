@@ -45,6 +45,13 @@ class InputManager: ObservableObject {
     @Published var isKeyboardCaptureEnabled = false
     @Published var isMouseCaptureEnabled = false
     @Published var isSnippetModeActive: Bool = false
+    @Published var lastMouseX: Int = 0
+    @Published var lastMouseY: Int = 0
+
+    var reverseScrollDirection: Bool {
+        get { UserDefaults.standard.bool(forKey: "overlook.input.reverseScroll") }
+        set { UserDefaults.standard.set(newValue, forKey: "overlook.input.reverseScroll") }
+    }
 
     init() {
         appDeactivationObserver = NotificationCenter.default.addObserver(
@@ -64,6 +71,8 @@ class InputManager: ObservableObject {
     }
 
     @Published var transportMode: TransportMode = .glkvmWebSocket
+
+    var agentWebSocketClient: GLKVMClient.WebSocketClient? { glkvmWebSocketClient }
     
     func setSnippetModeActive(_ active: Bool) {
         let wasActive = isSnippetModeActive
@@ -160,6 +169,10 @@ class InputManager: ObservableObject {
                     }
                     guard shouldSend else { continue }
                     try? await ws.sendHidMouseMove(toX: move.toX, toY: move.toY)
+                    await MainActor.run {
+                        self.lastMouseX = move.toX
+                        self.lastMouseY = move.toY
+                    }
                 }
 
                 try? await Task.sleep(nanoseconds: sendIntervalNs)
@@ -739,6 +752,10 @@ class InputManager: ObservableObject {
             Task {
                 try? await ws.sendHidMouseMove(toX: toX, toY: toY)
                 try? await ws.sendHidMouseButton(button: button, state: event.isDown)
+                await MainActor.run {
+                    self.lastMouseX = toX
+                    self.lastMouseY = toY
+                }
             }
             return
         }
@@ -762,6 +779,10 @@ class InputManager: ObservableObject {
             let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
             Task {
                 try? await ws.sendHidMouseMove(toX: toX, toY: toY)
+                await MainActor.run {
+                    self.lastMouseX = toX
+                    self.lastMouseY = toY
+                }
             }
             return
         }
@@ -780,8 +801,9 @@ class InputManager: ObservableObject {
     
     private func sendMouseScrollEvent(_ event: MouseScrollEvent) {
         if transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
-            let dx = clampInt(Int(event.deltaX.rounded()), min: -127, max: 127)
-            let dy = clampInt(Int(event.deltaY.rounded()), min: -127, max: 127)
+            let multiplier: CGFloat = reverseScrollDirection ? -1 : 1
+            let dx = clampInt(Int((event.deltaX * multiplier).rounded()), min: -127, max: 127)
+            let dy = clampInt(Int((event.deltaY * multiplier).rounded()), min: -127, max: 127)
             Task {
                 try? await ws.sendHidMouseWheel(deltaX: dx, deltaY: dy)
             }

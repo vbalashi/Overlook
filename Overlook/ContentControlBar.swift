@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct ContentControlBar: View {
+    @EnvironmentObject var quickPasteManager: QuickPasteManager
+    @EnvironmentObject var kvmDeviceManager: KVMDeviceManager
+
     @Binding var selectedDevice: KVMDevice?
 
     let devices: [KVMDevice]
@@ -15,6 +18,8 @@ struct ContentControlBar: View {
     let onScan: () -> Void
     let onToggleOCR: () -> Void
     let onToggleConnection: () -> Void
+
+    @State private var showingQuickPaste = false
 
     var body: some View {
         HStack {
@@ -42,6 +47,16 @@ struct ContentControlBar: View {
 
             Spacer()
 
+            Button(action: { showingQuickPaste.toggle() }) {
+                Image(systemName: "bolt.fill")
+            }
+            .help("Quick Paste")
+            .popover(isPresented: $showingQuickPaste, arrowEdge: .bottom) {
+                QuickPasteView()
+                    .environmentObject(quickPasteManager)
+                    .environmentObject(kvmDeviceManager)
+            }
+
             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
                 Image(systemName: "gearshape")
             }
@@ -52,7 +67,7 @@ struct ContentControlBar: View {
                 Image(systemName: isOCRModeEnabled ? "text.viewfinder" : "doc.text")
             }
             .disabled(!isConnected)
-            .help(isOCRModeEnabled ? "Disable OCR Selection" : "Enable OCR Selection")
+            .help(isOCRModeEnabled ? "Disable OCR Selection (⌘⇧C)" : "Enable OCR Selection (⌘⇧C)")
 
             Button(action: onToggleConnection) {
                 Image(systemName: isConnected ? "personalhotspot.slash" : "personalhotspot")

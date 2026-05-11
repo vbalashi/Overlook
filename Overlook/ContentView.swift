@@ -7,6 +7,7 @@ struct ContentView: View {
     @EnvironmentObject var inputManager: InputManager
     @EnvironmentObject var ocrManager: OCRManager
     @EnvironmentObject var kvmDeviceManager: KVMDeviceManager
+    @EnvironmentObject var quickPasteManager: QuickPasteManager
     
     @State private var selectedDevice: KVMDevice?
     @State private var isConnected = false
@@ -28,6 +29,7 @@ struct ContentView: View {
     @State private var didAutoOpenConnections = false
     @State private var isConnectionBusy = false
     @State private var connectionErrorMessage: String?
+    @State private var showingQuickPaste = false
 
     @State private var pausedCaptureKeyboardWasEnabled: Bool?
     @State private var pausedCaptureMouseWasEnabled: Bool?
@@ -40,6 +42,7 @@ struct ContentView: View {
     @State private var fullscreenHoverTask: Task<Void, Never>?
 
     @AppStorage("overlook.appAppearance") private var appAppearance: String = "system"
+    @AppStorage("overlook.autoResumeLastConnection") private var autoResumeLastConnection: Bool = false
 
     private var preferredColorScheme: ColorScheme? {
         switch appAppearance {
@@ -264,7 +267,10 @@ struct ContentView: View {
 
             updateInputCaptureForUIOverlays()
 
-            if !didAutoOpenConnections, !isConnected {
+            if autoResumeLastConnection, let lastDevice = kvmDeviceManager.lastConnectedDevice {
+                didAutoOpenConnections = true
+                connectToDevice(lastDevice)
+            } else if !didAutoOpenConnections, !isConnected {
                 didAutoOpenConnections = true
                 showingConnections = true
             }
@@ -273,6 +279,9 @@ struct ContentView: View {
             updateInputCaptureForUIOverlays()
         }
         .onChange(of: showingConnections) { _, _ in
+            updateInputCaptureForUIOverlays()
+        }
+        .onChange(of: showingQuickPaste) { _, _ in
             updateInputCaptureForUIOverlays()
         }
         .onChange(of: windowRef) { _, newValue in
@@ -353,6 +362,14 @@ struct ContentView: View {
                     }
                     .disabled(webRTCManager.videoSize == nil)
                     .help("Fit window to guest")
+
+                    Button(action: { showingQuickPaste.toggle() }) {
+                        Image(systemName: "bolt.fill")
+                    }
+                    .help("Quick Paste")
+                    .popover(isPresented: $showingQuickPaste, arrowEdge: .bottom) {
+                        QuickPasteView()
+                    }
 
                     Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
                         Image(systemName: "gearshape")

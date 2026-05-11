@@ -40,7 +40,13 @@ final class KVMDeviceManager: NSObject, ObservableObject {
     }()
 
     private static let savedDevicesKey = "overlook.saved_devices.v1"
+    private static let lastConnectedDeviceKey = "overlook.lastConnectedDevice.v1"
     private static let sharedDefaults = UserDefaults(suiteName: "com.overlook.app") ?? .standard
+
+    var lastConnectedDevice: KVMDevice? {
+        guard let savedId = Self.sharedDefaults.string(forKey: Self.lastConnectedDeviceKey) else { return nil }
+        return availableDevices.first { $0.id == savedId }
+    }
 
     private struct PersistedDevice: Codable, Hashable {
         let host: String
@@ -938,6 +944,7 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         let persisted = persistDevice(finalDevice)
         connectedDevice = persisted
         glkvmClient = client
+        Self.sharedDefaults.set(persisted.id, forKey: Self.lastConnectedDeviceKey)
         OverlookLog.info("KVMDeviceManager connect complete host=\(persisted.host) port=\(persisted.port) savedId=\(persisted.id)")
         return persisted
     }
