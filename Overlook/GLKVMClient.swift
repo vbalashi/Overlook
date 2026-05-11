@@ -485,14 +485,23 @@ final class GLKVMClient {
     }
 
     func authCheck() async throws {
-        _ = try await request(
-            method: "GET",
-            path: "api/auth/check",
-            responseType: GLKVMResponse<GLKVMEmptyResult>.self
-        )
+        do {
+            _ = try await request(
+                method: "GET",
+                path: "api/auth/check",
+                responseType: GLKVMResponse<GLKVMEmptyResult>.self
+            )
+        } catch ClientError.decodingFailed {
+            // Some GLKVM firmware returns HTTP 200 with an empty body for a
+            // successful auth check. Treat that as OK instead of surfacing a
+            // misleading login failure.
+            let data = try await requestData(method: "GET", path: "api/auth/check")
+            guard data.isEmpty else { throw ClientError.decodingFailed }
+            OverlookLog.info("authCheck accepted empty 200 response")
+        }
     }
 
-    func authLogin(user: String = "admin", password: String) async throws -> String {
+    func authLogin(user: String = "admin", password: String) async throws -> String? {
         let boundary = "----OverlookBoundary\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
 
         var body = Data()
@@ -543,6 +552,11 @@ final class GLKVMClient {
         let cookies = HTTPCookie.cookies(withResponseHeaderFields: headers, for: url)
         if let token = cookies.first(where: { $0.name == "auth_token" })?.value {
             return token
+        }
+
+        if data.isEmpty {
+            OverlookLog.info("authLogin accepted empty 200 response without token")
+            return nil
         }
 
         let preview = String(data: data.prefix(512), encoding: .utf8) ?? "<binary \(data.count)B>"

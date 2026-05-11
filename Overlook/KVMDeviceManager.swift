@@ -654,13 +654,12 @@ final class KVMDeviceManager: NSObject, ObservableObject {
                 request.timeoutInterval = 3
 
                 do {
-                    let (_, response) = try await probeSession.data(for: request)
+                    let (data, response) = try await probeSession.data(for: request)
                     guard let http = response as? HTTPURLResponse else { continue }
 
-                    switch http.statusCode {
-                    case 200, 401, 403, 301, 302, 307, 308:
+                    if isPlausibleGLKVMProbeResponse(data: data, response: http) {
                         return true
-                    default:
+                    } else {
                         if logFailures {
                             OverlookLog.info("scan glkvm-status host=\(host) port=\(port) status=\(http.statusCode) url=\(OverlookLog.redactedURL(url))")
                         }
@@ -692,13 +691,10 @@ final class KVMDeviceManager: NSObject, ObservableObject {
             request.timeoutInterval = 1
 
             do {
-                let (_, response) = try await probeSession.data(for: request)
+                let (data, response) = try await probeSession.data(for: request)
                 guard let http = response as? HTTPURLResponse else { continue }
-                switch http.statusCode {
-                case 200, 401, 403, 301, 302, 307, 308:
+                if isPlausibleGLKVMProbeResponse(data: data, response: http) {
                     return true
-                default:
-                    continue
                 }
             } catch {
                 continue
@@ -706,6 +702,28 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         }
 
         return false
+    }
+
+    private func isPlausibleGLKVMProbeResponse(data: Data, response: HTTPURLResponse) -> Bool {
+        switch response.statusCode {
+        case 401, 403:
+            return true
+        case 301, 302, 307, 308:
+            guard let location = response.value(forHTTPHeaderField: "Location")?.lowercased() else {
+                return false
+            }
+            return location.contains("/api/auth/check") || location.contains("/api/init/is_inited")
+        case 200:
+            guard !data.isEmpty else { return false }
+            let text = String(decoding: data.prefix(2048), as: UTF8.self).lowercased()
+            return text.contains("\"ok\"")
+                || text.contains("\"result\"")
+                || text.contains("gl-kvm")
+                || text.contains("glkvm")
+                || text.contains("comet")
+        default:
+            return false
+        }
     }
 
     private func probeWebUIKeywords(host: String, port: Int) async -> Bool {
@@ -920,15 +938,16 @@ final class KVMDeviceManager: NSObject, ObservableObject {
                 do {
                     OverlookLog.info("authLogin start host=\(finalDevice.host) port=\(finalDevice.port) user=\(user) passwordLength=\(password.count)")
                     let token = try await client.authLogin(user: user, password: password)
-                    client.authToken = token
-
                     var updated = finalDevice
-                    updated.authToken = token
-                    if let index = availableDevices.firstIndex(where: { $0.id == updated.id }) {
-                        availableDevices[index] = updated
+                    if let token, !token.isEmpty {
+                        client.authToken = token
+                        updated.authToken = token
+                        if let index = availableDevices.firstIndex(where: { $0.id == updated.id }) {
+                            availableDevices[index] = updated
+                        }
                     }
                     finalDevice = updated
-                    OverlookLog.info("authLogin OK host=\(finalDevice.host) port=\(finalDevice.port) tokenLen=\(token.count)")
+                    OverlookLog.info("authLogin OK host=\(finalDevice.host) port=\(finalDevice.port) tokenLen=\(token?.count ?? 0)")
                     NSLog("[Overlook connect] authLogin OK")
                 } catch {
                     OverlookLog.error("authLogin threw host=\(finalDevice.host) port=\(finalDevice.port) error=\(OverlookLog.describe(error))")
