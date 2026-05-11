@@ -5,6 +5,11 @@ import WebRTC
 import Vision
 import Network
 
+extension Notification.Name {
+    static let overlookShowSettings = Notification.Name("overlook.showSettings")
+    static let overlookShowConnections = Notification.Name("overlook.showConnections")
+}
+
 @main
 struct OverlookApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
@@ -23,16 +28,85 @@ struct OverlookApp: App {
         .windowToolbarStyle(.unifiedCompact)
         .windowResizability(.automatic)
         .commands {
-            CommandMenu("Remote") {
-                Button("Paste Mac Clipboard to Remote") {
-                    appDelegate.inputManager.pasteMacClipboardToRemote()
+            RemoteCommands(
+                kvmDeviceManager: appDelegate.kvmDeviceManager,
+                inputManager: appDelegate.inputManager,
+                showSettings: {
+                    appDelegate.showSettings()
+                },
+                showConnections: {
+                    appDelegate.showConnections()
                 }
-                .keyboardShortcut("v", modifiers: [.command, .shift])
+            )
 
-                Button("OCR Copy from Screen") {
-                    appDelegate.inputManager.startSnippetOCR()
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings...") {
+                    appDelegate.showSettings()
                 }
-                .keyboardShortcut("c", modifiers: [.command, .shift])
+                .keyboardShortcut(",", modifiers: [.command])
+            }
+        }
+    }
+}
+
+struct RemoteCommands: Commands {
+    @ObservedObject var kvmDeviceManager: KVMDeviceManager
+    let inputManager: InputManager
+    let showSettings: () -> Void
+    let showConnections: () -> Void
+
+    var body: some Commands {
+        CommandMenu("Remote") {
+            Button("New Connection...") {
+                showConnections()
+            }
+
+            Button("Show Statistics") {
+                showConnections()
+            }
+
+            Divider()
+
+            Button("Paste Mac Clipboard to Remote") {
+                inputManager.pasteMacClipboardToRemote()
+            }
+            .keyboardShortcut("v", modifiers: [.command, .shift])
+
+            Button("OCR Copy from Screen") {
+                inputManager.startSnippetOCR()
+            }
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+
+            Divider()
+
+            Button("Settings...") {
+                showSettings()
+            }
+            .keyboardShortcut(",", modifiers: [.command])
+
+            Divider()
+
+            Text("Send Remote Shortcut")
+
+            if kvmDeviceManager.systemShortcuts.isEmpty {
+                Text(kvmDeviceManager.glkvmClient == nil ? "Connect to a device first" : "No shortcuts available")
+            } else {
+                ForEach(kvmDeviceManager.systemShortcuts, id: \.self) { shortcut in
+                    Button(shortcut.label) {
+                        sendShortcut(shortcut)
+                    }
+                }
+            }
+        }
+    }
+
+    private func sendShortcut(_ shortcut: GLKVMSystemConfigShortcut) {
+        guard let client = kvmDeviceManager.glkvmClient else { return }
+        Task {
+            do {
+                try await client.sendHidShortcut(keys: shortcut.keys)
+            } catch {
+                OverlookLog.error("Failed to send menu shortcut \(shortcut.label): \(OverlookLog.describe(error))")
             }
         }
     }
@@ -69,6 +143,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Configure app for KVM control
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func showSettings() {
+        showMainWindow()
+        NotificationCenter.default.post(name: .overlookShowSettings, object: nil)
+    }
+
+    func showConnections() {
+        showMainWindow()
+        NotificationCenter.default.post(name: .overlookShowConnections, object: nil)
     }
 
     private func showMainWindow() {

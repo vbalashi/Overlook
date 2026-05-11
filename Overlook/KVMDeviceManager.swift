@@ -9,12 +9,14 @@ final class KVMDeviceManager: NSObject, ObservableObject {
     @Published var availableDevices: [KVMDevice] = []
     @Published var connectedDevice: KVMDevice?
     @Published var glkvmClient: GLKVMClient?
+    @Published var systemShortcuts: [GLKVMSystemConfigShortcut] = []
     @Published var isScanning = false
     @Published var scanProgress: Double = 0.0
     @Published var autoScanEnabled: Bool = false
     
     private var networkMonitor: NWPathMonitor?
     private var scanTimer: Timer?
+    private var shortcutLoadTask: Task<Void, Never>?
     private var deviceDiscoverySessions: [NWBrowser] = []
 
     private final class InsecureTLSDelegate: NSObject, URLSessionDelegate {
@@ -962,9 +964,36 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         let persisted = persistDevice(finalDevice)
         connectedDevice = persisted
         glkvmClient = client
+        refreshSystemShortcuts()
         Self.sharedDefaults.set(persisted.id, forKey: Self.lastConnectedDeviceKey)
         OverlookLog.info("KVMDeviceManager connect complete host=\(persisted.host) port=\(persisted.port) savedId=\(persisted.id)")
         return persisted
+    }
+
+    func refreshSystemShortcuts() {
+        shortcutLoadTask?.cancel()
+
+        guard let client = glkvmClient else {
+            systemShortcuts = []
+            return
+        }
+
+        shortcutLoadTask = Task { [weak self, weak client] in
+            guard let client else { return }
+            do {
+                let config = try await client.getSystemConfig()
+                await MainActor.run {
+                    guard self?.glkvmClient === client else { return }
+                    self?.systemShortcuts = config.shortcuts
+                }
+            } catch {
+                OverlookLog.error("Failed to load system shortcuts for menu: \(OverlookLog.describe(error))")
+                await MainActor.run {
+                    guard self?.glkvmClient === client else { return }
+                    self?.systemShortcuts = []
+                }
+            }
+        }
     }
 
     private func persistDevice(_ device: KVMDevice) -> KVMDevice {
@@ -1083,6 +1112,9 @@ final class KVMDeviceManager: NSObject, ObservableObject {
     func disconnectFromDevice() {
         connectedDevice = nil
         glkvmClient = nil
+        systemShortcuts = []
+        shortcutLoadTask?.cancel()
+        shortcutLoadTask = nil
     }
     
     deinit {

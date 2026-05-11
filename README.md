@@ -1,6 +1,8 @@
 # Overlook
 
-[![Xcode - Build](https://github.com/rcawston/Overlook/actions/workflows/objective-c-xcode.yml/badge.svg)](https://github.com/rcawston/Overlook/actions/workflows/objective-c-xcode.yml)
+[![Xcode - Build](https://github.com/vbalashi/Overlook/actions/workflows/objective-c-xcode.yml/badge.svg)](https://github.com/vbalashi/Overlook/actions/workflows/objective-c-xcode.yml)
+
+This is a curated fork of [`rcawston/Overlook`](https://github.com/rcawston/Overlook), combining selected improvements from the `dh0er` and `moming2k` forks with focused macOS UX refinements.
 
 Overlook is a macOS-native remote console for GL.iNet GLKVM / Comet-style KVM devices.
 

@@ -354,6 +354,18 @@ struct ContentView: View {
         .onChange(of: appAppearance) { _, _ in
             applyAppAppearance()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .overlookShowSettings)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showingConnections = false
+                showingSettings = true
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .overlookShowConnections)) { _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                showingSettings = false
+                showingConnections = true
+            }
+        }
         .sheet(isPresented: $showingManualConnect) {
             ManualConnectSheet(
                 isPresented: $showingManualConnect,

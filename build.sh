@@ -68,7 +68,14 @@ cp -R "$APP_SRC" "$DEST_DIR/"
 
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister"
 if [[ -x "$LSREGISTER" ]]; then
+  if [[ "$APP_SRC" != "$PWD/$DEST_DIR/$FULL_PRODUCT_NAME" ]]; then
+    "$LSREGISTER" -u "$APP_SRC" >/dev/null 2>&1 || true
+  fi
   "$LSREGISTER" -f -R -trusted "$DEST_DIR/$FULL_PRODUCT_NAME"
+fi
+
+if [[ "$APP_SRC" != "$PWD/$DEST_DIR/$FULL_PRODUCT_NAME" ]]; then
+  rm -rf "$APP_SRC"
 fi
 
 echo "Copied $FULL_PRODUCT_NAME -> $DEST_DIR/"
