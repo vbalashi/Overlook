@@ -20,6 +20,20 @@ If you spend time in BIOS/UEFI, bootloaders, headless servers, or “the machine
 
 ---
 
+## What is different in this fork?
+
+Compared with the original `rcawston/Overlook`, this fork focuses on making Overlook more usable as a daily-driver Mac KVM console:
+
+- **Better input workflow:** selected keyboard-routing and shortcut handling improvements from `dh0er`, including safer local shortcut passthrough and cleanup of modifier state.
+- **Clipboard and OCR tools:** one-shot snippet OCR (`⌘⇧C`) and Mac-to-remote paste (`⌘⇧V`) for moving text in and out of machines that do not have normal clipboard integration.
+- **Connection and diagnostics polish:** receiver stats surfaced in the UI, improved fullscreen controls, connection handling, and a WebUI-aligned settings panel.
+- **Power-user additions:** selected automation/Agent API and Quick Paste pieces from `moming2k`, kept behind focused UI instead of broad feature sprawl.
+- **Our local refinements:** flatter app menus for remote commands, menu access to settings/statistics/new connection, device-provided shortcuts in the app menu, app icon updates, and build-script cleanup so Spotlight sees a single app bundle.
+
+The goal is not to rewrite Overlook, but to collect the most practical fork improvements into one coherent macOS app.
+
+---
+
 ## Highlights
 
 ### 1) Copy from the remote screen with `⌘⇧C`
