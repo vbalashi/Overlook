@@ -22,6 +22,19 @@ struct OverlookApp: App {
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unifiedCompact)
         .windowResizability(.automatic)
+        .commands {
+            CommandMenu("Remote") {
+                Button("Paste Mac Clipboard to Remote") {
+                    appDelegate.inputManager.pasteMacClipboardToRemote()
+                }
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+
+                Button("OCR Copy from Screen") {
+                    appDelegate.inputManager.startSnippetOCR()
+                }
+                .keyboardShortcut("c", modifiers: [.command, .shift])
+            }
+        }
     }
 }
 

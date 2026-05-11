@@ -331,13 +331,13 @@ class InputManager: ObservableObject {
                 releaseRemoteCommandForLocalShortcut(timestamp: event.timestamp, modifiers: modifiers)
                 releaseRemoteModifiersForLocalShortcut(modifiers: modifiers, timestamp: event.timestamp)
                 suppressedKeyUps.insert(keyCode)
-                pasteClipboardToRemote()
+                pasteMacClipboardToRemote()
                 return nil
             case .some(.startSnippet):
                 releaseRemoteCommandForLocalShortcut(timestamp: event.timestamp, modifiers: modifiers)
                 releaseRemoteModifiersForLocalShortcut(modifiers: modifiers, timestamp: event.timestamp)
                 suppressedKeyUps.insert(keyCode)
-                NotificationCenter.default.post(name: .overlookStartSnippet, object: nil)
+                startSnippetOCR()
                 return nil
             case .none:
                 break
@@ -643,7 +643,11 @@ class InputManager: ObservableObject {
         }
     }
 
-    private func pasteClipboardToRemote() {
+    func startSnippetOCR() {
+        NotificationCenter.default.post(name: .overlookStartSnippet, object: nil)
+    }
+
+    func pasteMacClipboardToRemote() {
         guard let client = glkvmClient else { return }
         guard let text = NSPasteboard.general.string(forType: .string) else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)

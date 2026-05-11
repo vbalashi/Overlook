@@ -167,6 +167,27 @@ struct ContentView: View {
                             .disabled(webRTCManager.videoSize == nil)
                             .help("Fit window to guest")
 
+                            Button(action: { showingQuickPaste.toggle() }) {
+                                Image(systemName: "bolt.fill")
+                            }
+                            .disabled(!isConnected)
+                            .help("Quick Paste")
+                            .popover(isPresented: $showingQuickPaste, arrowEdge: .bottom) {
+                                QuickPasteView()
+                            }
+
+                            Button(action: { inputManager.pasteMacClipboardToRemote() }) {
+                                Image(systemName: "doc.on.clipboard")
+                            }
+                            .disabled(!isConnected)
+                            .help("Paste Mac Clipboard to Remote (⌘⇧V)")
+
+                            Button(action: { inputManager.startSnippetOCR() }) {
+                                Image(systemName: "text.viewfinder")
+                            }
+                            .disabled(!isConnected)
+                            .help("OCR Copy from Screen (⌘⇧C)")
+
                             Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
                                 Image(systemName: "gearshape")
                             }
