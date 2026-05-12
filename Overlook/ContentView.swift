@@ -38,9 +38,6 @@ struct ContentView: View {
     @State private var windowRef: NSWindow?
 
     @State private var isFullscreen: Bool = false
-    @State private var showFullscreenControls: Bool = false
-    @State private var fullscreenControlsDismissedUntilMouseExit: Bool = false
-    @State private var fullscreenHoverTask: Task<Void, Never>?
 
     @AppStorage("overlook.appAppearance") private var appAppearance: String = "system"
     @AppStorage("overlook.autoResumeLastConnection") private var autoResumeLastConnection: Bool = false
@@ -129,92 +126,6 @@ struct ContentView: View {
                     }
                 )
                 .allowsHitTesting(!showingSettings)
-            }
-
-            if isFullscreen && !showingSettings && !showingConnections {
-                VStack(spacing: 0) {
-                    Color.clear
-                        .frame(height: 28)
-                        .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
-                        .onHover { hovering in
-                            fullscreenHoverTask?.cancel()
-                            if hovering {
-                                guard fullscreenControlsDismissedUntilMouseExit == false else { return }
-                                fullscreenHoverTask = Task { @MainActor in
-                                    try? await Task.sleep(nanoseconds: 350_000_000)
-                                    if isFullscreen, fullscreenControlsDismissedUntilMouseExit == false {
-                                        withAnimation(.easeInOut(duration: 0.15)) {
-                                            showFullscreenControls = true
-                                        }
-                                    }
-                                }
-                            } else {
-                                fullscreenControlsDismissedUntilMouseExit = false
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    showFullscreenControls = false
-                                }
-                            }
-                        }
-
-                    if showFullscreenControls {
-                        HStack(spacing: 10) {
-                            Button(action: { showingConnections.toggle() }) {
-                                Image(systemName: "personalhotspot")
-                            }
-                            .help("Connections")
-
-                            Button(action: { showingQuickPaste.toggle() }) {
-                                Image(systemName: "bolt.fill")
-                            }
-                            .disabled(!isConnected)
-                            .help("Quick Paste")
-                            .popover(isPresented: $showingQuickPaste, arrowEdge: .bottom) {
-                                QuickPasteView()
-                            }
-
-                            Button(action: { inputManager.pasteMacClipboardToRemote() }) {
-                                Image(systemName: "doc.on.clipboard")
-                            }
-                            .disabled(!isConnected)
-                            .help("Paste Mac Clipboard to Remote (⌘⇧V)")
-
-                            Button(action: { inputManager.startSnippetOCR() }) {
-                                Image(systemName: "text.viewfinder")
-                            }
-                            .disabled(!isConnected)
-                            .help("OCR Copy from Screen (⌘⇧C)")
-
-                            Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
-                                Image(systemName: "gearshape")
-                            }
-                            .disabled(!isConnected)
-                            .help("Settings")
-
-                            Button(action: {
-                                fullscreenHoverTask?.cancel()
-                                fullscreenControlsDismissedUntilMouseExit = true
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    showFullscreenControls = false
-                                }
-                            }) {
-                                Image(systemName: "chevron.up")
-                            }
-                            .help("Hide fullscreen controls")
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(.ultraThinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .padding(.top, 6)
-                        .padding(.leading, 12)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .transition(.opacity)
-                    }
-
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             if showingSettings || showingConnections {
@@ -315,24 +226,18 @@ struct ContentView: View {
         }
         .onChange(of: windowRef) { _, newValue in
             isFullscreen = newValue?.styleMask.contains(.fullScreen) ?? false
-            showFullscreenControls = false
-            fullscreenControlsDismissedUntilMouseExit = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { note in
             guard let window = note.object as? NSWindow else { return }
             windowRef = window
             window.toolbar?.isVisible = false
             isFullscreen = true
-            showFullscreenControls = false
-            fullscreenControlsDismissedUntilMouseExit = false
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
             guard let window = note.object as? NSWindow else { return }
             windowRef = window
             window.toolbar?.isVisible = true
             isFullscreen = false
-            showFullscreenControls = false
-            fullscreenControlsDismissedUntilMouseExit = false
         }
         .onReceive(kvmDeviceManager.$glkvmClient) { client in
             inputManager.setGLKVMClient(client)

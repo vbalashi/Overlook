@@ -43,6 +43,7 @@ run_xcodebuild() {
     -project Overlook.xcodeproj \
     -scheme Overlook \
     -configuration "$CONFIG" \
+    CODE_SIGNING_ALLOWED=NO \
     "$@"
 }
 
