@@ -120,7 +120,7 @@ Should do after first successful run:
 
 - Add a tiny in-app diagnostics view or log export button for Agent API and input state.
 - Make Agent API docs match exact current behavior for screenshot formats and `/find-text`.
-- Decide whether to keep `CLAUDE.md`; it came from `moming2k` and may not be useful for us.
+- Decide whether to keep `AGENTS.md`; it came from `moming2k` and may not be useful for us.
 - Review `moming2k` feature branches individually:
   - connection presets first
   - status HUD second

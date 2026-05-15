@@ -74,7 +74,9 @@ class InputManager: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.clearOneShotLocalShortcutState()
+                guard let self else { return }
+                self.releaseTrackedRemoteModifiersForCaptureStop()
+                self.clearOneShotLocalShortcutState()
             }
         }
     }
@@ -404,13 +406,13 @@ class InputManager: ObservableObject {
         let isDown: Bool
         switch keyName {
         case "ShiftLeft", "ShiftRight":
-            isDown = flags.contains(.shift)
+            isDown = modifierIsDown(keyCode: keyCode, aggregateFlag: .shift, flags: flags)
         case "ControlLeft", "ControlRight":
-            isDown = flags.contains(.control)
+            isDown = modifierIsDown(keyCode: keyCode, aggregateFlag: .control, flags: flags)
         case "AltLeft", "AltRight":
-            isDown = flags.contains(.option)
+            isDown = modifierIsDown(keyCode: keyCode, aggregateFlag: .option, flags: flags)
         case "MetaLeft", "MetaRight":
-            isDown = flags.contains(.command)
+            isDown = modifierIsDown(keyCode: keyCode, aggregateFlag: .command, flags: flags)
             if isDown {
                 pendingCommandKeyCode = nil
                 activeCommandKeyCode = keyCode
@@ -447,6 +449,21 @@ class InputManager: ObservableObject {
             modifiers: flags,
             timestamp: event.timestamp
         )
+    }
+
+    private func modifierIsDown(keyCode: UInt16,
+                                aggregateFlag: NSEvent.ModifierFlags,
+                                flags: NSEvent.ModifierFlags) -> Bool {
+        guard flags.contains(aggregateFlag) else { return false }
+
+        if remotePressedModifierKeyCodes.contains(keyCode)
+            || locallySuppressedModifierKeyCodes.contains(keyCode)
+            || pendingCommandKeyCode == keyCode
+            || activeCommandKeyCode == keyCode {
+            return false
+        }
+
+        return true
     }
 
     private enum LocalKeyAction {
@@ -1104,22 +1121,22 @@ class InputManager: ObservableObject {
         case 51: return "Backspace"
         case 53: return "Escape"
 
-        case 82: return "Numpad0"
-        case 83: return "Numpad1"
-        case 84: return "Numpad2"
-        case 85: return "Numpad3"
-        case 86: return "Numpad4"
-        case 87: return "Numpad5"
-        case 88: return "Numpad6"
-        case 89: return "Numpad7"
-        case 91: return "Numpad8"
-        case 92: return "Numpad9"
-        case 65: return "NumpadDecimal"
+        case 82: return "Digit0"
+        case 83: return "Digit1"
+        case 84: return "Digit2"
+        case 85: return "Digit3"
+        case 86: return "Digit4"
+        case 87: return "Digit5"
+        case 88: return "Digit6"
+        case 89: return "Digit7"
+        case 91: return "Digit8"
+        case 92: return "Digit9"
+        case 65: return "Period"
         case 67: return "NumpadMultiply"
         case 69: return "NumpadAdd"
         case 78: return "NumpadSubtract"
         case 75: return "NumpadDivide"
-        case 76: return "NumpadEnter"
+        case 76: return "Enter"
         case 81: return "NumpadEqual"
 
         case 114: return "Help"

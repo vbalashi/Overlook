@@ -44,6 +44,10 @@ run_xcodebuild() {
     -scheme Overlook \
     -configuration "$CONFIG" \
     CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGNING_REQUIRED=NO \
+    CODE_SIGN_IDENTITY="" \
+    DEVELOPMENT_TEAM="" \
+    ENABLE_DEBUG_DYLIB=NO \
     "$@"
 }
 

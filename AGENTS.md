@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents when working with code in this repository.
 
 ## Build Commands
 
@@ -8,18 +8,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Use the repo wrapper instead of invoking `xcodebuild build` directly. The
 wrapper copies the runnable app to `build/debug/Overlook.app` or
 `build/release/Overlook.app`, unregisters Xcode's temporary product, and deletes
-stale `DerivedData` app bundles so macOS only sees one Overlook binary.
+stale `DerivedData` app bundles so macOS only sees one Overlook binary. The
+wrapper disables local code signing by default, so agents and local command-line
+builds do not require a Mac Development certificate. It also disables Xcode's
+Debug dylib layout so debug builds contain a single app executable.
 
 ```bash
 ./build.sh -c debug
 ```
 
-If local signing is unavailable, still use the wrapper and pass signing
-overrides through it:
+Do not run `xcodebuild build` directly for normal verification. If direct
+`xcodebuild` is unavoidable, include the same local signing overrides:
+`CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" ENABLE_DEBUG_DYLIB=NO`.
 
-```bash
-./build.sh -c debug -- CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
-```
+Xcode may print CoreSimulator warnings on hosts with mismatched simulator
+runtime metadata, for example `Unable to load simulator devices` or
+`CoreSimulator is out of date`. For this macOS app, treat those lines as
+non-fatal noise when `BUILD SUCCEEDED` is present and the app was copied to
+`build/debug/Overlook.app` or `build/release/Overlook.app`. Do not surface them
+as build problems unless the build actually fails.
 
 **Resolve Swift package dependencies:**
 ```bash

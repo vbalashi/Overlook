@@ -11,6 +11,9 @@ import CoreAudio
 #if canImport(AVFoundation)
 import AVFoundation
 #endif
+#if canImport(AppKit)
+import AppKit
+#endif
 import Network
 import Combine
 
@@ -115,6 +118,10 @@ class WebRTCManager: NSObject, ObservableObject {
     private var autoReconnectTask: Task<Void, Never>?
     private var autoReconnectAttempt: Int = 0
     private var autoReconnectGeneration: Int = 0
+    private var wakeReconnectTask: Task<Void, Never>?
+    private var systemSleepObservers: [NSObjectProtocol] = []
+    private var isSystemSleeping = false
+    private var shouldReconnectAfterWake = false
 
     private var lastInboundVideoBytesReceived: Int64?
     private var lastInboundVideoBytesTimestamp: TimeInterval?
@@ -169,9 +176,13 @@ class WebRTCManager: NSObject, ObservableObject {
         super.init()
         setupWebRTC()
         startAudioDeviceChangeMonitoring()
+        startSystemSleepMonitoring()
     }
 
     deinit {
+        wakeReconnectTask?.cancel()
+        wakeReconnectTask = nil
+
         if let block = audioDevicesListenerBlock {
             var address = AudioObjectPropertyAddress(
                 mSelector: kAudioHardwarePropertyDevices,
@@ -190,6 +201,99 @@ class WebRTCManager: NSObject, ObservableObject {
         audioDevicesListenerBlock = nil
         audioDeviceChangeDebounceTask?.cancel()
         audioDeviceChangeDebounceTask = nil
+    }
+
+    private func startSystemSleepMonitoring() {
+#if canImport(AppKit)
+        guard systemSleepObservers.isEmpty else { return }
+
+        let center = NSWorkspace.shared.notificationCenter
+        let mainQueue = OperationQueue.main
+
+        systemSleepObservers.append(center.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: mainQueue
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleSystemWillSleep()
+            }
+        })
+
+        systemSleepObservers.append(center.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: mainQueue
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleSystemDidWake(reason: "system wake")
+            }
+        })
+
+        systemSleepObservers.append(center.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: mainQueue
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleSystemDidWake(reason: "display wake")
+            }
+        })
+#endif
+    }
+
+    private func handleSystemWillSleep() {
+        isSystemSleeping = true
+        wakeReconnectTask?.cancel()
+        wakeReconnectTask = nil
+
+        shouldReconnectAfterWake = lastConnectedDevice != nil && (peerConnection != nil || isConnected || isConnecting)
+        guard shouldReconnectAfterWake else { return }
+
+        OverlookLog.info("System will sleep; closing WebRTC session for wake recovery")
+        disconnect()
+        lastDisconnectReason = "System slept. Reconnecting after wake..."
+    }
+
+    private func handleSystemDidWake(reason: String) {
+        isSystemSleeping = false
+        guard shouldReconnectAfterWake else { return }
+        guard lastConnectedDevice != nil else {
+            shouldReconnectAfterWake = false
+            return
+        }
+
+        scheduleWakeReconnect(reason: reason)
+    }
+
+    private func scheduleWakeReconnect(reason: String) {
+        guard let device = lastConnectedDevice else { return }
+
+        wakeReconnectTask?.cancel()
+        isConnecting = true
+        lastDisconnectReason = "Woke from \(reason). Reconnecting..."
+
+        OverlookLog.info("WebRTC wake reconnect scheduled reason=\(reason) delaySeconds=2.0 host=\(device.host) port=\(device.port)")
+
+        wakeReconnectTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard self.isSystemSleeping == false else { return }
+                guard let device = self.lastConnectedDevice else { return }
+
+                self.wakeReconnectTask = nil
+                self.shouldReconnectAfterWake = false
+                self.isAutoReconnectInProgress = true
+
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer { self.isAutoReconnectInProgress = false }
+                    await self.reconnect(to: device)
+                }
+            }
+        }
     }
 
     private func setLastVideoFrameTime(_ time: CFTimeInterval?) {
@@ -432,6 +536,7 @@ class WebRTCManager: NSObject, ObservableObject {
 
     private func scheduleAutoReconnect(reason: String) {
         guard let device = lastConnectedDevice else { return }
+        guard isSystemSleeping == false else { return }
         guard isAutoReconnectInProgress == false else { return }
 
         autoReconnectTask?.cancel()
