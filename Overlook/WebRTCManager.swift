@@ -125,6 +125,8 @@ class WebRTCManager: NSObject, ObservableObject {
 
     private var lastInboundVideoBytesReceived: Int64?
     private var lastInboundVideoBytesTimestamp: TimeInterval?
+    private var lastInboundVideoFramesDecoded: Double?
+    private var lastInboundVideoFramesTimestamp: TimeInterval?
 
     private var lastInboundAudioBytesReceived: Int64?
     private var lastInboundAudioBytesTimestamp: TimeInterval?
@@ -139,10 +141,6 @@ class WebRTCManager: NSObject, ObservableObject {
 
     private let audioInputDeviceUIDDefaultsKey = "overlook.audio.inputDeviceUID"
     private let audioOutputDeviceUIDDefaultsKey = "overlook.audio.outputDeviceUID"
-
-    private var fpsWindowStartTime: CFTimeInterval = 0
-    private var fpsFrameCount: Int = 0
-    private var lastFpsPublishTime: CFTimeInterval = 0
 
     private let streamHealthQueue = DispatchQueue(label: "com.overlook.stream-health")
     private var lastVideoFrameTime: CFTimeInterval?
@@ -166,6 +164,14 @@ class WebRTCManager: NSObject, ObservableObject {
     private var janusWaiters: [String: CheckedContinuation<[String: Any], Error>] = [:]
 
     private var isFrameCaptureEnabled: Bool = false
+    private enum FrameCaptureReason: Hashable {
+        case manual
+        case letterbox
+        case snapshot
+    }
+
+    private var frameCaptureReasons: Set<FrameCaptureReason> = []
+    private var isFrameRendererAttached = false
     private var lastFrameCaptureTime: CFTimeInterval = 0
 
     private let letterboxDetector = LetterboxDetector()
@@ -577,9 +583,55 @@ class WebRTCManager: NSObject, ObservableObject {
 
     func setFrameCaptureEnabled(_ enabled: Bool) {
         isFrameCaptureEnabled = enabled
+        setFrameCaptureActive(.manual, enabled)
+    }
 
-        if enabled == false {
+    func captureCurrentFrame(timeout: TimeInterval = 1.0) async -> CVPixelBuffer? {
+        if let currentFrame {
+            return currentFrame
+        }
+
+        setFrameCaptureActive(.snapshot, true)
+        defer { setFrameCaptureActive(.snapshot, false) }
+
+        let deadline = CACurrentMediaTime() + timeout
+        while CACurrentMediaTime() < deadline {
+            if let currentFrame {
+                return currentFrame
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        return currentFrame
+    }
+
+    private func setFrameCaptureActive(_ reason: FrameCaptureReason, _ active: Bool) {
+        if active {
+            frameCaptureReasons.insert(reason)
+        } else {
+            frameCaptureReasons.remove(reason)
+        }
+
+        updateFrameRendererSubscription()
+
+        if frameCaptureReasons.isEmpty {
             currentFrame = nil
+        }
+    }
+
+    private func updateFrameRendererSubscription() {
+        guard let videoTrack else {
+            isFrameRendererAttached = false
+            return
+        }
+
+        let shouldAttach = !frameCaptureReasons.isEmpty
+        if shouldAttach, !isFrameRendererAttached {
+            videoTrack.add(self)
+            isFrameRendererAttached = true
+        } else if !shouldAttach, isFrameRendererAttached {
+            videoTrack.remove(self)
+            isFrameRendererAttached = false
         }
     }
     
@@ -1152,7 +1204,10 @@ class WebRTCManager: NSObject, ObservableObject {
             await MainActor.run {
                 self.lastInboundVideoBytesReceived = nil
                 self.lastInboundVideoBytesTimestamp = nil
+                self.lastInboundVideoFramesDecoded = nil
+                self.lastInboundVideoFramesTimestamp = nil
                 self.inboundVideoKbps = nil
+                self.inboundFps = nil
                 self.inboundVideoPlayoutDelayMs = nil
                 self.inboundVideoJitterMs = nil
                 self.inboundVideoDecodeMs = nil
@@ -1168,6 +1223,17 @@ class WebRTCManager: NSObject, ObservableObject {
             let db = Double(bytesReceived - lastBytes)
             if dt > 0, db >= 0 {
                 kbps = Int((db * 8.0 / dt) / 1000.0)
+            }
+        }
+
+        var fps: Double?
+        if let framesDecoded,
+           let lastFrames = lastInboundVideoFramesDecoded,
+           let lastFrameTs = lastInboundVideoFramesTimestamp {
+            let dt = now - lastFrameTs
+            let df = framesDecoded - lastFrames
+            if dt > 0, df >= 0 {
+                fps = df / dt
             }
         }
 
@@ -1219,9 +1285,12 @@ class WebRTCManager: NSObject, ObservableObject {
             }
             self.lastInboundVideoBytesReceived = bytesReceived
             self.lastInboundVideoBytesTimestamp = now
+            self.lastInboundVideoFramesDecoded = framesDecoded
+            self.lastInboundVideoFramesTimestamp = now
             self.lastJitterBufferDelaySeconds = jitterBufferDelaySeconds
             self.lastJitterBufferEmittedCount = jitterBufferEmittedCount
             self.inboundVideoKbps = kbps
+            self.inboundFps = fps
             self.inboundVideoPlayoutDelayMs = playoutDelayMs
             self.inboundVideoJitterMs = jitterMs
             self.inboundVideoDecodeMs = decodeMs
@@ -1433,8 +1502,11 @@ class WebRTCManager: NSObject, ObservableObject {
             if let videoView {
                 videoTrack.remove(videoView)
             }
-            videoTrack.remove(self)
+            if isFrameRendererAttached {
+                videoTrack.remove(self)
+            }
         }
+        isFrameRendererAttached = false
         videoTrack = nil
         
         peerConnection?.close()
@@ -1461,6 +1533,8 @@ class WebRTCManager: NSObject, ObservableObject {
         sourceContentRectInVideo = nil
         stopLetterboxDetectionTask()
         isFrameCaptureEnabled = false
+        frameCaptureReasons.removeAll()
+        isFrameRendererAttached = false
         inboundVideoKbps = nil
         inboundFps = nil
         inboundVideoPlayoutDelayMs = nil
@@ -1475,13 +1549,12 @@ class WebRTCManager: NSObject, ObservableObject {
         audioIceCurrentRoundTripTimeMs = nil
         lastInboundVideoBytesReceived = nil
         lastInboundVideoBytesTimestamp = nil
+        lastInboundVideoFramesDecoded = nil
+        lastInboundVideoFramesTimestamp = nil
         lastInboundAudioBytesReceived = nil
         lastInboundAudioBytesTimestamp = nil
         lastAudioJitterBufferDelaySeconds = nil
         lastAudioJitterBufferEmittedCount = nil
-        fpsWindowStartTime = 0
-        fpsFrameCount = 0
-        lastFpsPublishTime = 0
     }
 
     private func ensureMicrophoneAccess() async -> Bool {
@@ -1637,7 +1710,7 @@ extension WebRTCManager: @preconcurrency RTCPeerConnectionDelegate {
         if let videoView {
             track.add(videoView)
         }
-        track.add(self)
+        updateFrameRendererSubscription()
     }
 }
 
@@ -1686,26 +1759,6 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
 
         setLastVideoFrameTime(now)
 
-        if fpsWindowStartTime == 0 {
-            fpsWindowStartTime = now
-            lastFpsPublishTime = now
-        }
-
-        fpsFrameCount += 1
-
-        if now - lastFpsPublishTime >= 0.5 {
-            let dt = now - fpsWindowStartTime
-            if dt > 0 {
-                let fps = Double(fpsFrameCount) / dt
-                Task { @MainActor in
-                    inboundFps = fps
-                }
-            }
-            fpsWindowStartTime = now
-            fpsFrameCount = 0
-            lastFpsPublishTime = now
-        }
-
         let minInterval: CFTimeInterval = 1.0 / 12.0
         if now - lastFrameCaptureTime < minInterval {
             return
@@ -1731,11 +1784,14 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
     private func startLetterboxDetectionTask() {
         guard letterboxDetectionTask == nil else { return }
         letterboxDetector.reset()
+        setFrameCaptureActive(.letterbox, true)
         let intervalNs = Self.letterboxDetectionIntervalSeconds
         let initialDelayNs: UInt64 = 800_000_000
+        let maxSampleAttempts = 6
         letterboxDetectionTask = Task.detached(priority: .utility) { [weak self] in
             try? await Task.sleep(nanoseconds: initialDelayNs)
-            while !Task.isCancelled {
+            var attemptsRemaining = maxSampleAttempts
+            while !Task.isCancelled, attemptsRemaining > 0 {
                 guard let self else { return }
                 let frame = await MainActor.run { self.currentFrame }
                 if let frame, let detected = self.letterboxDetector.sample(frame) {
@@ -1749,9 +1805,15 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
                                 OverlookLog.info("letterbox-detect contentRectInVideo=full")
                             }
                         }
+                        self.finishLetterboxDetectionTask()
                     }
+                    return
                 }
+                attemptsRemaining -= 1
                 try? await Task.sleep(nanoseconds: intervalNs)
+            }
+            await MainActor.run {
+                self?.finishLetterboxDetectionTask()
             }
         }
     }
@@ -1793,7 +1855,12 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
 
     private func stopLetterboxDetectionTask() {
         letterboxDetectionTask?.cancel()
+        finishLetterboxDetectionTask()
+    }
+
+    private func finishLetterboxDetectionTask() {
         letterboxDetectionTask = nil
+        setFrameCaptureActive(.letterbox, false)
     }
 }
 
@@ -1822,6 +1889,7 @@ final class WebRTCManager: NSObject, ObservableObject {
     @Published var lastVideoFrameAgeSeconds: Int?
     @Published var latency: Int = 0
     @Published var currentFrame: CVPixelBuffer?
+    @Published var videoSize: CGSize?
     @Published var audioEnabled = false
     @Published var micEnabled = false
     
@@ -1845,6 +1913,16 @@ final class WebRTCManager: NSObject, ObservableObject {
         lastVideoFrameAgeSeconds = nil
         latency = 0
         currentFrame = nil
+    }
+
+    func setFrameCaptureEnabled(_ enabled: Bool) {
+        if enabled == false {
+            currentFrame = nil
+        }
+    }
+
+    func captureCurrentFrame(timeout: TimeInterval = 1.0) async -> CVPixelBuffer? {
+        currentFrame
     }
 }
 

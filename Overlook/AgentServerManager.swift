@@ -28,7 +28,6 @@ final class AgentServerManager: ObservableObject {
         self.kvmDeviceManager = kvmDeviceManager
         self.webRTCManager = webRTCManager
         self.ocrManager = OCRManager()
-        webRTCManager.setFrameCaptureEnabled(true)
     }
 
     // MARK: - API Key
@@ -317,8 +316,7 @@ final class AgentServerManager: ObservableObject {
             } else if let x = asInt(body["x"]), let y = asInt(body["y"]) {
                 // HID coordinates — reverse-convert to pixel for the response
                 hidX = x; hidY = y
-                let (fw, fh) = (webRTCManager?.currentFrame.map { CVPixelBufferGetWidth($0) } ?? 3440,
-                                webRTCManager?.currentFrame.map { CVPixelBufferGetHeight($0) } ?? 1440)
+                let (fw, fh) = frameDimensions()
                 outPx = Int((Double(x) / 32767.0 + 1.0) / 2.0 * Double(fw))
                 outPy = Int((Double(y) / 32767.0 + 1.0) / 2.0 * Double(fh))
             } else {
@@ -365,7 +363,7 @@ final class AgentServerManager: ObservableObject {
             guard let body = jsonBody(req.body), let searchText = body["text"] as? String else {
                 return .error("Missing 'text'")
             }
-            guard let pixelBuffer = webRTCManager?.currentFrame else {
+            guard let pixelBuffer = await currentVideoFrame() else {
                 return .error("No video frame available", status: "503 Service Unavailable")
             }
             do {
@@ -402,7 +400,7 @@ final class AgentServerManager: ObservableObject {
             return .json(["hid_x": hx, "hid_y": hy, "frame_width": fw, "frame_height": fh])
 
         case ("GET", "/status/globalprotect"):
-            guard let pixelBuffer = webRTCManager?.currentFrame else {
+            guard let pixelBuffer = await currentVideoFrame() else {
                 return .error("No video frame available", status: "503 Service Unavailable")
             }
             guard let ws = inputManager?.agentWebSocketClient else {
@@ -416,7 +414,7 @@ final class AgentServerManager: ObservableObject {
                 let (hx, hy, _, _) = pixelToHID(px: scanX, py: menuBarY)
                 try? await ws.sendHidMouseMove(toX: hx, toY: hy)
                 try? await Task.sleep(nanoseconds: 120_000_000) // 120ms for tooltip
-                guard let frame = webRTCManager?.currentFrame else { continue }
+                guard let frame = await currentVideoFrame() else { continue }
                 let regions = (try? await ocrManager?.detectTextRegions(in: frame)) ?? []
                 // Look for "GlobalProtect" in tooltip text
                 if let match = regions.first(where: { $0.text.localizedCaseInsensitiveContains("GlobalProtect") }) {
@@ -435,10 +433,10 @@ final class AgentServerManager: ObservableObject {
             let qp = queryParams(from: req.path)
             let fmt = qp["format"] ?? "jpeg"
             let quality = Double(qp["quality"] ?? "") ?? 0.8
-            guard webRTCManager?.currentFrame != nil else {
+            guard let pixelBuffer = await currentVideoFrame() else {
                 return .error("No video frame available", status: "503 Service Unavailable")
             }
-            guard let (imgData, mimeType) = captureScreenshot(format: fmt, quality: quality) else {
+            guard let (imgData, mimeType) = captureScreenshot(from: pixelBuffer, format: fmt, quality: quality) else {
                 return .error("Screenshot failed", status: "500 Internal Server Error")
             }
             return HTTPResponse(status: "200 OK", contentType: mimeType, body: imgData)
@@ -592,7 +590,8 @@ final class AgentServerManager: ObservableObject {
         case "take_screenshot":
             let fmt = args["format"] as? String ?? "jpeg"
             let quality = (args["quality"] as? Double) ?? 0.8
-            guard let (imgData, mimeType) = captureScreenshot(format: fmt, quality: quality) else { throw MCPError("Screenshot failed") }
+            guard let pixelBuffer = await currentVideoFrame(),
+                  let (imgData, mimeType) = captureScreenshot(from: pixelBuffer, format: fmt, quality: quality) else { throw MCPError("Screenshot failed") }
             return [["type": "image", "data": imgData.base64EncodedString(), "mimeType": mimeType]]
 
         case "type_text":
@@ -665,7 +664,7 @@ final class AgentServerManager: ObservableObject {
 
         case "find_text":
             guard let searchText = args["text"] as? String else { throw MCPError("Missing 'text'") }
-            guard let pixelBuffer = webRTCManager?.currentFrame else { throw MCPError("No video frame available") }
+            guard let pixelBuffer = await currentVideoFrame() else { throw MCPError("No video frame available") }
             let regions = try await ocrManager?.detectTextRegions(in: pixelBuffer) ?? []
             let query = searchText.lowercased()
             let matches = regions.filter { $0.text.lowercased().contains(query) }
@@ -682,7 +681,7 @@ final class AgentServerManager: ObservableObject {
             return [["type": "text", "text": "Found \(matches.count) match(es) for \"\(searchText)\":\n\(lines.joined(separator: "\n"))"]]
 
         case "get_globalprotect_status":
-            guard let pixelBuffer = webRTCManager?.currentFrame else { throw MCPError("No video frame available") }
+            guard let pixelBuffer = await currentVideoFrame() else { throw MCPError("No video frame available") }
             guard let ws = inputManager?.agentWebSocketClient else { throw MCPError("Not connected") }
             let fw = CVPixelBufferGetWidth(pixelBuffer)
             let menuBarY = 15
@@ -691,7 +690,7 @@ final class AgentServerManager: ObservableObject {
                 try await ws.sendHidMouseMove(toX: hx, toY: hy)
                 inputManager?.lastMouseX = hx; inputManager?.lastMouseY = hy
                 try await Task.sleep(nanoseconds: 2_000_000_000)
-                guard let frame = webRTCManager?.currentFrame else { continue }
+                guard let frame = await currentVideoFrame() else { continue }
                 let regions = (try? await ocrManager?.detectTextRegions(in: frame)) ?? []
                 if let match = regions.first(where: { $0.text.localizedCaseInsensitiveContains("GlobalProtect") }) {
                     let tooltip = regions.map { $0.text }.joined(separator: " ")
@@ -741,14 +740,23 @@ final class AgentServerManager: ObservableObject {
     }
 
     // Returns (imageData, mimeType). format: "png" | "jpeg" | "webp", quality: 0.0–1.0
-    private func captureScreenshot(format: String = "png", quality: Double = 0.8) -> (Data, String)? {
-        let cgImage: CGImage?
-        if let pixelBuffer = webRTCManager?.currentFrame {
-            let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-            cgImage = CIContext().createCGImage(ciImage, from: ciImage.extent)
-        } else {
-            cgImage = nil
+    private func currentVideoFrame(timeout: TimeInterval = 1.0) async -> CVPixelBuffer? {
+        await webRTCManager?.captureCurrentFrame(timeout: timeout)
+    }
+
+    private func frameDimensions() -> (Int, Int) {
+        if let buf = webRTCManager?.currentFrame {
+            return (CVPixelBufferGetWidth(buf), CVPixelBufferGetHeight(buf))
         }
+        if let size = webRTCManager?.videoSize, size.width > 0, size.height > 0 {
+            return (Int(size.width), Int(size.height))
+        }
+        return (1920, 1080)
+    }
+
+    private func captureScreenshot(from pixelBuffer: CVPixelBuffer, format: String = "png", quality: Double = 0.8) -> (Data, String)? {
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let cgImage = CIContext().createCGImage(ciImage, from: ciImage.extent)
         guard let img = cgImage else { return nil }
 
         let clampedQuality = quality.clamped(to: 0.0...1.0)
@@ -782,14 +790,7 @@ final class AgentServerManager: ObservableObject {
     // Returns (hid_x, hid_y, frame_width, frame_height).
     // Uses live frame dimensions when available, falls back to 1920×1080.
     private func pixelToHID(px: Int, py: Int) -> (Int, Int, Int, Int) {
-        let fw: Int
-        let fh: Int
-        if let buf = webRTCManager?.currentFrame {
-            fw = CVPixelBufferGetWidth(buf)
-            fh = CVPixelBufferGetHeight(buf)
-        } else {
-            fw = 1920; fh = 1080
-        }
+        let (fw, fh) = frameDimensions()
         let hx = Int((Double(px) / Double(fw) * 2.0 - 1.0) * 32767)
         let hy = Int((Double(py) / Double(fh) * 2.0 - 1.0) * 32767)
         return (hx, hy, fw, fh)
