@@ -1739,10 +1739,7 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
                 guard let self else { return }
                 let frame = await MainActor.run { self.currentFrame }
                 if let frame, let detected = self.letterboxDetector.sample(frame) {
-                    let unit = CGRect(x: 0, y: 0, width: 1, height: 1)
-                    let isFullFrame = abs(detected.minX) < 0.005 && abs(detected.minY) < 0.005 &&
-                                       abs(detected.maxX - 1) < 0.005 && abs(detected.maxY - 1) < 0.005
-                    let resolved: CGRect? = isFullFrame ? nil : detected.intersection(unit)
+                    let resolved = Self.resolvedLetterboxContentRect(from: detected)
                     await MainActor.run {
                         if self.sourceContentRectInVideo != resolved {
                             self.sourceContentRectInVideo = resolved
@@ -1757,6 +1754,41 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
                 try? await Task.sleep(nanoseconds: intervalNs)
             }
         }
+    }
+
+    nonisolated private static func resolvedLetterboxContentRect(from detected: CGRect) -> CGRect? {
+        let unit = CGRect(x: 0, y: 0, width: 1, height: 1)
+        let rect = detected.intersection(unit)
+        guard rect.width > 0, rect.height > 0 else { return nil }
+
+        let fullTolerance: CGFloat = 0.005
+        let isFullFrame = abs(rect.minX) < fullTolerance &&
+            abs(rect.minY) < fullTolerance &&
+            abs(rect.maxX - 1) < fullTolerance &&
+            abs(rect.maxY - 1) < fullTolerance
+        guard !isFullFrame else { return nil }
+
+        let edgeTolerance: CGFloat = 0.01
+        let symmetryTolerance: CGFloat = 0.03
+
+        let leftInset = rect.minX
+        let rightInset = 1 - rect.maxX
+        let topInset = rect.minY
+        let bottomInset = 1 - rect.maxY
+
+        let hasSymmetricPillarbox = topInset < edgeTolerance &&
+            bottomInset < edgeTolerance &&
+            abs(leftInset - rightInset) < symmetryTolerance &&
+            (leftInset > edgeTolerance || rightInset > edgeTolerance)
+
+        let hasSymmetricLetterbox = leftInset < edgeTolerance &&
+            rightInset < edgeTolerance &&
+            abs(topInset - bottomInset) < symmetryTolerance &&
+            (topInset > edgeTolerance || bottomInset > edgeTolerance)
+
+        guard hasSymmetricPillarbox || hasSymmetricLetterbox else { return nil }
+
+        return rect
     }
 
     private func stopLetterboxDetectionTask() {

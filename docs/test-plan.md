@@ -93,6 +93,13 @@ Expected:
 - Clicks match visual position.
 - Letterboxed video does not offset clicks into black bars.
 
+Regression check:
+
+- Use a remote desktop with a mostly dark background and a bright, smaller window inside it.
+- Move the cursor across the bright window and the surrounding dark desktop.
+- Watch for the local macOS cursor and the remote cursor drifting apart, then converging again after a few seconds.
+- In logs, asymmetric detected content such as a centered app window should not become the active mouse source rect. `cursor-diag` should continue to report `src=full` unless the video stream itself has true symmetric letterbox or pillarbox bars.
+
 ## Snippet OCR Manual Test
 
 1. Connect to a remote screen containing readable English text.
