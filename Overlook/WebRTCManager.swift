@@ -112,6 +112,9 @@ class WebRTCManager: NSObject, ObservableObject {
     private var audioDeviceChangeDebounceTask: Task<Void, Never>?
     private var isAutoReconnectInProgress: Bool = false
     private var lastAutoReconnectAt: Date?
+    private var autoReconnectTask: Task<Void, Never>?
+    private var autoReconnectAttempt: Int = 0
+    private var autoReconnectGeneration: Int = 0
 
     private var lastInboundVideoBytesReceived: Int64?
     private var lastInboundVideoBytesTimestamp: TimeInterval?
@@ -139,7 +142,7 @@ class WebRTCManager: NSObject, ObservableObject {
     private var connectedIceTime: CFTimeInterval?
     private var streamHealthTimer: Timer?
 
-    private let streamStallThresholdSeconds: CFTimeInterval = 3.0
+    private let streamStallThresholdSeconds: CFTimeInterval = 15.0
     private let initialFrameTimeoutSeconds: CFTimeInterval = 5.0
     
     private let allowInsecureTLS = true
@@ -322,6 +325,7 @@ class WebRTCManager: NSObject, ObservableObject {
         }
 
         isConnecting = true
+        autoReconnectAttempt = 0
         isStreamStalled = false
         lastDisconnectReason = nil
         lastVideoFrameAgeSeconds = nil
@@ -392,9 +396,52 @@ class WebRTCManager: NSObject, ObservableObject {
         disconnect()
         do {
             try await connect(to: device)
+            OverlookLog.info("WebRTC reconnect succeeded host=\(device.host) port=\(device.port)")
         } catch {
             isConnecting = false
             lastDisconnectReason = "Reconnect failed: \(String(describing: error))"
+            OverlookLog.error("WebRTC reconnect failed host=\(device.host) port=\(device.port) error=\(OverlookLog.describe(error))")
+            scheduleAutoReconnect(reason: "Reconnect failed")
+        }
+    }
+
+    private func scheduleAutoReconnect(reason: String) {
+        guard let device = lastConnectedDevice else { return }
+        guard isAutoReconnectInProgress == false else { return }
+
+        autoReconnectTask?.cancel()
+        autoReconnectAttempt += 1
+        autoReconnectGeneration += 1
+
+        let generation = autoReconnectGeneration
+        let attempt = autoReconnectAttempt
+        let delay = min(pow(2.0, Double(max(0, attempt - 1))), 8.0)
+
+        isConnecting = true
+        if lastDisconnectReason == nil || lastDisconnectReason == reason {
+            lastDisconnectReason = "\(reason). Reconnecting…"
+        }
+
+        OverlookLog.info("WebRTC auto reconnect scheduled reason=\(reason) attempt=\(attempt) delaySeconds=\(String(format: "%.1f", delay)) host=\(device.host) port=\(device.port)")
+
+        autoReconnectTask = Task { [weak self] in
+            let nanoseconds = UInt64(delay * 1_000_000_000)
+            if nanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: nanoseconds)
+            }
+
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard generation == self.autoReconnectGeneration else { return }
+                self.autoReconnectTask = nil
+                self.isAutoReconnectInProgress = true
+
+                Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    defer { self.isAutoReconnectInProgress = false }
+                    await self.reconnect(to: device)
+                }
+            }
         }
     }
 
@@ -443,6 +490,7 @@ class WebRTCManager: NSObject, ObservableObject {
 
         let url = normalizedWebSocketURL(rawURL)
         print("WebRTC signaling connect: \(url.absoluteString)")
+        OverlookLog.info("WebRTC signaling connect url=\(OverlookLog.redactedURL(url)) host=\(device.host) port=\(device.port)")
 
         let config = URLSessionConfiguration.default
         let session = URLSession(configuration: config, delegate: SessionDelegate(allowInsecureTLS: allowInsecureTLS), delegateQueue: nil)
@@ -565,7 +613,10 @@ class WebRTCManager: NSObject, ObservableObject {
                 do {
                     try await self.sendJanusKeepAlive()
                 } catch {
-                    // Ignore keepalive errors, next user action will reconnect
+                    let reason = "Janus keepalive failed"
+                    self.lastDisconnectReason = reason
+                    OverlookLog.error("\(reason): \(OverlookLog.describe(error))")
+                    self.scheduleAutoReconnect(reason: reason)
                 }
             }
         }
@@ -660,6 +711,8 @@ class WebRTCManager: NSObject, ObservableObject {
                 if isConnected || hasEverConnectedToStream || lastDisconnectReason == nil {
                     lastDisconnectReason = "Signaling connection lost"
                 }
+                OverlookLog.error("WebSocket receive error generation=\(generation) error=\(OverlookLog.describe(error))")
+                scheduleAutoReconnect(reason: "Signaling connection lost")
                 break
             }
         }
@@ -842,6 +895,8 @@ class WebRTCManager: NSObject, ObservableObject {
                     if self.isStreamStalled == false {
                         self.isStreamStalled = true
                         self.lastDisconnectReason = "Video stream stalled"
+                        OverlookLog.error("Video stream stalled ageSeconds=\(String(format: "%.1f", age)) kbps=\(self.inboundVideoKbps.map(String.init) ?? "nil") fps=\(self.inboundFps.map { String(format: "%.1f", $0) } ?? "nil") rttMs=\(self.iceCurrentRoundTripTimeMs.map(String.init) ?? "nil")")
+                        self.scheduleAutoReconnect(reason: "Video stream stalled")
                     }
                     return
                 }
@@ -852,6 +907,8 @@ class WebRTCManager: NSObject, ObservableObject {
                     if self.isStreamStalled == false {
                         self.isStreamStalled = true
                         self.lastDisconnectReason = "Video stream stalled"
+                        OverlookLog.error("Initial video frame timeout after ICE connected")
+                        self.scheduleAutoReconnect(reason: "Video stream stalled")
                     }
                     return
                 }
@@ -1197,6 +1254,10 @@ class WebRTCManager: NSObject, ObservableObject {
     
     func disconnect() {
         signalingGeneration += 1
+        autoReconnectGeneration += 1
+        autoReconnectTask?.cancel()
+        autoReconnectTask = nil
+        autoReconnectAttempt = 0
 
         connectionTimer?.invalidate()
         connectionTimer = nil
@@ -1343,6 +1404,7 @@ extension WebRTCManager: @preconcurrency RTCPeerConnectionDelegate {
             // Audio may connect/disconnect independently when split into a separate PeerConnection.
             guard peerConnection === self.peerConnection else {
                 print("(audio) ICE connection state changed: \(stateChanged)")
+                OverlookLog.info("Audio ICE connection state changed: \(stateChanged)")
                 return
             }
 
@@ -1352,21 +1414,25 @@ extension WebRTCManager: @preconcurrency RTCPeerConnectionDelegate {
                 hasEverConnectedToStream = true
                 connectedIceTime = CACurrentMediaTime()
                 lastDisconnectReason = nil
+                autoReconnectAttempt = 0
                 startLetterboxDetectionTask()
             } else {
                 stopLetterboxDetectionTask()
                 if stateChanged == .disconnected {
                     lastDisconnectReason = "Video connection lost"
                     isConnecting = false
+                    scheduleAutoReconnect(reason: "Video connection lost")
                 } else if stateChanged == .failed {
                     lastDisconnectReason = "Video connection failed"
                     isConnecting = false
+                    scheduleAutoReconnect(reason: "Video connection failed")
                 } else if stateChanged == .closed {
                     lastDisconnectReason = "Video connection closed"
                     isConnecting = false
                 }
             }
             print("ICE connection state changed: \(stateChanged)")
+            OverlookLog.info("Video ICE connection state changed: \(stateChanged) connected=\(self.isConnected)")
         }
     }
     
@@ -1438,6 +1504,7 @@ extension WebRTCManager: @preconcurrency RTCDataChannelDelegate {
     func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
         Task { @MainActor in
             print("Data channel state changed: \(dataChannel.readyState)")
+            OverlookLog.info("Data channel state changed: \(dataChannel.readyState)")
         }
     }
     
