@@ -34,6 +34,30 @@ The goal is not to rewrite Overlook, but to collect the most practical fork impr
 
 ---
 
+## Local builds
+
+Use the build wrapper for local debug/release builds:
+
+```bash
+./build.sh -c debug
+```
+
+The wrapper copies the runnable app to `build/debug/Overlook.app` and removes duplicate `Overlook.app` build products from Xcode DerivedData so Spotlight and LaunchServices see a single local app bundle.
+
+If you run raw `xcodebuild`, clean duplicate build products afterwards:
+
+```bash
+scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook.app"
+```
+
+To check the guardrail without deleting anything:
+
+```bash
+scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook.app" --check
+```
+
+---
+
 ## Highlights
 
 ### 1) Copy from the remote screen with `⌘⇧C`

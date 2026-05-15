@@ -8,22 +8,36 @@ LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchS
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/cleanup-overlook-build-products.sh [--dry-run]
+Usage: scripts/cleanup-overlook-build-products.sh [--dry-run] [--keep APP_PATH] [--check]
 
 Removes local Overlook build products that can appear as duplicate apps in
 Spotlight or LaunchServices:
   - build/debug/Overlook.app and build/release/Overlook.app in this checkout
   - Xcode DerivedData Build/Products Overlook.app bundles
 
+Use --keep APP_PATH after a build to preserve the canonical app bundle while
+removing every other local build product. Use --check to fail if any duplicate
+build product exists besides the kept app.
+
 This does not reset TCC permissions, preferences, containers, or saved app data.
 USAGE
 }
 
 DRY_RUN=0
+CHECK_ONLY=0
+KEEP_APP=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)
       DRY_RUN=1
+      ;;
+    --check)
+      CHECK_ONLY=1
+      ;;
+    --keep)
+      shift
+      [[ $# -gt 0 ]] || { echo "error: --keep requires an app path" >&2; exit 64; }
+      KEEP_APP="$(cd "$(dirname "$1")" 2>/dev/null && pwd)/$(basename "$1")"
       ;;
     -h|--help)
       usage
@@ -58,26 +72,48 @@ run_quiet() {
 
 remove_app() {
   local app="$1"
+  local resolved_app
   [[ -d "$app" ]] || return 0
 
-  if [[ -x "$LSREGISTER" ]]; then
-    run_quiet "$LSREGISTER" -u "$app" || true
+  resolved_app="$(cd "$(dirname "$app")" && pwd)/$(basename "$app")"
+  if [[ -n "$KEEP_APP" && "$resolved_app" == "$KEEP_APP" ]]; then
+    echo "Keeping canonical build product: $resolved_app"
+    return 0
   fi
-  run rm -rf "$app"
+
+  if [[ "$CHECK_ONLY" -eq 1 ]]; then
+    echo "Duplicate Overlook build product found: $resolved_app" >&2
+    return 2
+  fi
+
+  if [[ -x "$LSREGISTER" ]]; then
+    run_quiet "$LSREGISTER" -u "$resolved_app" || true
+  fi
+  run rm -rf "$resolved_app"
 }
 
-remove_app "$ROOT_DIR/build/debug/$APP_NAME"
-remove_app "$ROOT_DIR/build/release/$APP_NAME"
+FAILED=0
+
+remove_app "$ROOT_DIR/build/debug/$APP_NAME" || FAILED=1
+remove_app "$ROOT_DIR/build/release/$APP_NAME" || FAILED=1
 
 if [[ -d "$DERIVED_DATA_DIR" ]]; then
   while IFS= read -r app; do
     [[ -n "$app" ]] || continue
-    remove_app "$app"
+    remove_app "$app" || FAILED=1
   done < <(find "$DERIVED_DATA_DIR" -path "*/Build/Products/*/$APP_NAME" -type d -prune 2>/dev/null)
+fi
+
+if [[ "$FAILED" -ne 0 ]]; then
+  exit 1
 fi
 
 if [[ -x "$LSREGISTER" ]]; then
   run_quiet "$LSREGISTER" -r -domain user || true
 fi
 
-echo "Overlook build product cleanup finished."
+if [[ "$CHECK_ONLY" -eq 1 ]]; then
+  echo "No duplicate Overlook build products found."
+else
+  echo "Overlook build product cleanup finished."
+fi

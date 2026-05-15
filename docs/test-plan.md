@@ -26,6 +26,19 @@ Expected:
 - Xcode resolves the WebRTC package.
 - Build succeeds.
 - App is copied to `build/debug/Overlook.app`.
+- Duplicate build-product guardrail passes:
+
+```bash
+scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook.app" --check
+```
+
+Expected: `No duplicate Overlook build products found.`
+
+Use `./build.sh` for local builds. If you run raw `xcodebuild`, immediately run:
+
+```bash
+scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook.app"
+```
 
 If build fails, check first:
 

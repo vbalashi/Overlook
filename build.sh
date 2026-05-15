@@ -51,21 +51,6 @@ run_xcodebuild() {
     "$@"
 }
 
-cleanup_derived_data_apps() {
-  local app
-  local derived_data="$HOME/Library/Developer/Xcode/DerivedData"
-
-  [[ -d "$derived_data" ]] || return 0
-
-  while IFS= read -r app; do
-    [[ -n "$app" ]] || continue
-    if [[ -x "$LSREGISTER" ]]; then
-      "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
-    fi
-    rm -rf "$app"
-  done < <(find "$derived_data" -path "*/Build/Products/*/$APP_NAME" -type d -prune 2>/dev/null)
-}
-
 echo "Building Overlook ($CONFIG)..."
 run_xcodebuild build "$@"
 
@@ -83,11 +68,12 @@ if [[ ! -d "$APP_SRC" ]]; then
   exit 1
 fi
 
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister"
+
 mkdir -p "$DEST_DIR"
 rm -rf "$DEST_DIR/$FULL_PRODUCT_NAME"
 cp -R "$APP_SRC" "$DEST_DIR/"
 
-LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister"
 if [[ -x "$LSREGISTER" ]]; then
   if [[ "$APP_SRC" != "$PWD/$DEST_DIR/$FULL_PRODUCT_NAME" ]]; then
     "$LSREGISTER" -u "$APP_SRC" >/dev/null 2>&1 || true
@@ -95,6 +81,6 @@ if [[ -x "$LSREGISTER" ]]; then
   "$LSREGISTER" -f -R -trusted "$DEST_DIR/$FULL_PRODUCT_NAME"
 fi
 
-cleanup_derived_data_apps
+scripts/cleanup-overlook-build-products.sh --keep "$PWD/$DEST_DIR/$FULL_PRODUCT_NAME"
 
 echo "Copied $FULL_PRODUCT_NAME -> $DEST_DIR/"
