@@ -95,10 +95,10 @@ Expected:
 
 Regression check:
 
-- Use a remote desktop with a mostly dark background and a bright, smaller window inside it.
+- Use a remote desktop with a black background and a bright, smaller window, such as Notepad, near the top center.
 - Move the cursor across the bright window and the surrounding dark desktop.
 - Watch for the local macOS cursor and the remote cursor drifting apart, then converging again after a few seconds.
-- In logs, asymmetric detected content such as a centered app window should not become the active mouse source rect. `cursor-diag` should continue to report `src=full` unless the video stream itself has true symmetric letterbox or pillarbox bars.
+- In logs, bright app content inside the remote desktop should not become the active mouse source rect. Live cursor `cursor-diag` should report `src=full`; mouse input is expected to map against the full remote framebuffer.
 
 ## Snippet OCR Manual Test
 

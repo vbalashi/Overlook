@@ -48,8 +48,7 @@ struct VideoSurfaceView: View {
                             inputManager.handleVideoMouseMove(
                                 pointInView: pointInView,
                                 viewSize: geometry.size,
-                                videoSize: currentVideoSize(),
-                                sourceContentRectInVideo: webRTCManager.sourceContentRectInVideo
+                                videoSize: currentVideoSize()
                             )
                         },
                         onMouseMoveWithLayerInfo: { pointInView, layerInfo in
@@ -58,7 +57,6 @@ struct VideoSurfaceView: View {
                                 pointInView: pointInView,
                                 viewSize: geometry.size,
                                 videoSize: currentVideoSize(),
-                                sourceContentRectInVideo: webRTCManager.sourceContentRectInVideo,
                                 videoViewLayerInfo: layerInfo
                             )
                         },
@@ -69,8 +67,7 @@ struct VideoSurfaceView: View {
                                 isDown: isDown,
                                 pointInView: pointInView,
                                 viewSize: geometry.size,
-                                videoSize: currentVideoSize(),
-                                sourceContentRectInVideo: webRTCManager.sourceContentRectInVideo
+                                videoSize: currentVideoSize()
                             )
                         },
                         onScrollWheel: { deltaX, deltaY in

@@ -283,8 +283,8 @@ Overlook’s settings UI lives in `Overlook/WebUISettingsPanel.swift` and is des
 ### “I see two cursors / the remote cursor drifts away”
 
 - This usually means local view coordinates and remote HID coordinates are being mapped through different rectangles.
-- Check whether the remote desktop has a dark background with a bright window centered inside it. That can look like letterboxing to automatic frame analysis.
-- Overlook only applies automatic content-rect correction when the detected crop looks like symmetric letterbox/pillarbox bars. Asymmetric bright UI regions should be ignored and treated as a full-frame remote desktop.
+- Check whether the remote desktop has a black background with a bright window, such as Notepad, near the top center. That can look like letterboxing to automatic frame analysis.
+- Live mouse input is mapped against the full remote framebuffer, not against automatically detected bright content. A window inside the remote desktop must never become the mouse coordinate source.
 - In app logs, compare `letterbox-detect` and `cursor-diag` entries. `src=full` should be used for normal desktop content; a non-full `src=(...)` should only appear for real stream letterboxing.
 
 ---
