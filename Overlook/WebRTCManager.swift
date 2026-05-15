@@ -139,6 +139,7 @@ class WebRTCManager: NSObject, ObservableObject {
 
     private let streamHealthQueue = DispatchQueue(label: "com.overlook.stream-health")
     private var lastVideoFrameTime: CFTimeInterval?
+    private var lastInboundVideoActivityTime: CFTimeInterval?
     private var connectedIceTime: CFTimeInterval?
     private var streamHealthTimer: Timer?
 
@@ -330,6 +331,7 @@ class WebRTCManager: NSObject, ObservableObject {
         lastDisconnectReason = nil
         lastVideoFrameAgeSeconds = nil
         setLastVideoFrameTime(nil)
+        lastInboundVideoActivityTime = nil
         connectedIceTime = nil
         hasEverConnectedToStream = false
 
@@ -338,12 +340,7 @@ class WebRTCManager: NSObject, ObservableObject {
                 videoView = RTCMTLNSVideoView(frame: .zero)
             }
             
-            // Create peer connection
-            let configuration = RTCConfiguration()
-            configuration.iceServers = [
-                RTCIceServer(urlStrings: ["stun:stun.l.google.com:19302"])
-            ]
-            configuration.sdpSemantics = .unifiedPlan
+            let configuration = await makeRTCConfiguration(for: device)
             
             let constraints = RTCMediaConstraints(
                 mandatoryConstraints: nil,
@@ -390,6 +387,34 @@ class WebRTCManager: NSObject, ObservableObject {
             lastDisconnectReason = reason
             throw error
         }
+    }
+
+    private func makeRTCConfiguration(for device: KVMDevice) async -> RTCConfiguration {
+        let configuration = RTCConfiguration()
+        configuration.sdpSemantics = .unifiedPlan
+
+        do {
+            let client = try GLKVMClient(device: device, allowInsecureTLS: allowInsecureTLS)
+            let credentials = try await client.getTurnCredentials()
+            if credentials.uris.isEmpty == false {
+                configuration.iceServers = [
+                    RTCIceServer(
+                        urlStrings: credentials.uris,
+                        username: credentials.username,
+                        credential: credentials.password
+                    )
+                ]
+                OverlookLog.info("WebRTC ICE config using device TURN servers count=\(credentials.uris.count) ttl=\(credentials.ttl)")
+                return configuration
+            }
+        } catch {
+            OverlookLog.error("WebRTC ICE config could not load device TURN credentials; using host candidates only error=\(OverlookLog.describe(error))")
+        }
+
+        // On the local network, host candidates are enough and avoid depending on a public STUN server.
+        configuration.iceServers = []
+        OverlookLog.info("WebRTC ICE config using host candidates only")
+        return configuration
     }
 
     func reconnect(to device: KVMDevice) async {
@@ -883,10 +908,18 @@ class WebRTCManager: NSObject, ObservableObject {
                 }
 
                 let lastFrame = self.getLastVideoFrameTime()
-                let age = lastFrame.map { now - $0 }
+                let lastStatsActivity = self.lastInboundVideoActivityTime
+                let lastActivity: CFTimeInterval?
+                if let lastFrame, let lastStatsActivity {
+                    lastActivity = max(lastFrame, lastStatsActivity)
+                } else {
+                    lastActivity = lastFrame ?? lastStatsActivity
+                }
 
-                if let age {
-                    self.lastVideoFrameAgeSeconds = max(0, Int(age.rounded()))
+                let age = lastActivity.map { now - $0 }
+
+                if let frameAge = lastFrame.map({ now - $0 }) {
+                    self.lastVideoFrameAgeSeconds = max(0, Int(frameAge.rounded()))
                 } else {
                     self.lastVideoFrameAgeSeconds = nil
                 }
@@ -901,7 +934,7 @@ class WebRTCManager: NSObject, ObservableObject {
                     return
                 }
 
-                if lastFrame == nil,
+                if lastActivity == nil,
                    let connectedAt = self.connectedIceTime,
                    now - connectedAt > self.initialFrameTimeoutSeconds {
                     if self.isStreamStalled == false {
@@ -1076,6 +1109,9 @@ class WebRTCManager: NSObject, ObservableObject {
         }
 
         await MainActor.run {
+            if lastBytes == nil || bytesReceived > (lastBytes ?? 0) {
+                self.lastInboundVideoActivityTime = CACurrentMediaTime()
+            }
             self.lastInboundVideoBytesReceived = bytesReceived
             self.lastInboundVideoBytesTimestamp = now
             self.lastJitterBufferDelaySeconds = jitterBufferDelaySeconds
@@ -1313,6 +1349,7 @@ class WebRTCManager: NSObject, ObservableObject {
         lastDisconnectReason = nil
         lastVideoFrameAgeSeconds = nil
         setLastVideoFrameTime(nil)
+        lastInboundVideoActivityTime = nil
         connectedIceTime = nil
         latency = 0
         videoSize = nil
