@@ -98,7 +98,7 @@ struct WebUISettingsPanel: View {
         ("dark", "Dark"),
     ]
 
-    private let integerFormatter: NumberFormatter = {
+    private static let integerFormatter: NumberFormatter = {
         let nf = NumberFormatter()
         nf.numberStyle = .none
         nf.generatesDecimalNumbers = false
@@ -485,7 +485,7 @@ struct WebUISettingsPanel: View {
                                     set: { $0.mousePolling = $1 },
                                     defaultValue: 10
                                 )
-                                TextField("", value: polling, formatter: integerFormatter)
+                                TextField("", value: polling, formatter: Self.integerFormatter)
                                     .frame(width: 70)
                                     .textFieldStyle(.roundedBorder)
                                     .multilineTextAlignment(.trailing)
@@ -501,7 +501,7 @@ struct WebUISettingsPanel: View {
                                     set: { $0.relativeSense = $1 },
                                     defaultValue: 10
                                 )
-                                TextField("", value: sensitivity, formatter: integerFormatter)
+                                TextField("", value: sensitivity, formatter: Self.integerFormatter)
                                     .frame(width: 70)
                                     .textFieldStyle(.roundedBorder)
                                     .multilineTextAlignment(.trailing)
@@ -517,7 +517,7 @@ struct WebUISettingsPanel: View {
                                     set: { $0.scrollRate = $1 },
                                     defaultValue: 5
                                 )
-                                TextField("", value: scrollRate, formatter: integerFormatter)
+                                TextField("", value: scrollRate, formatter: Self.integerFormatter)
                                     .frame(width: 70)
                                     .textFieldStyle(.roundedBorder)
                                     .multilineTextAlignment(.trailing)

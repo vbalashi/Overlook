@@ -29,6 +29,7 @@ class InputManager: ObservableObject {
     private var mouseMoveSenderTask: Task<Void, Never>?
     private static let mouseMoveSendIntervalNs: UInt64 = 4_166_667
     private static let defaultCommandKeyCode: UInt16 = 55
+    private static let cursorDiagnosticsDefaultsKey = "overlook.debug.cursorDiagnostics"
 
     private var lastCursorDiagLogTime: CFTimeInterval = 0
 
@@ -132,6 +133,7 @@ class InputManager: ObservableObject {
     }
 
     private func logCursorDiagnosticsIfDue(pointInView: CGPoint, viewSize: CGSize, videoSize: CGSize?, sourceContentRectInVideo: CGRect?, normalized: CGPoint, layerInfo: String?) {
+        guard UserDefaults.standard.bool(forKey: Self.cursorDiagnosticsDefaultsKey) else { return }
         let now = CACurrentMediaTime()
         guard now - lastCursorDiagLogTime >= 0.33 else { return }
         lastCursorDiagLogTime = now
