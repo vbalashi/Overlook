@@ -275,7 +275,7 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { note in
             guard let window = note.object as? NSWindow else { return }
             windowRef = window
-            window.toolbar?.isVisible = false
+            window.toolbar?.isVisible = true
             isFullscreen = true
             updateWindowStreamVisibility()
         }
@@ -371,47 +371,45 @@ struct ContentView: View {
             )
         }
         .toolbar {
-            if isFullscreen == false {
-                ToolbarItemGroup(placement: .automatic) {
-                    Button(action: { showingConnections.toggle() }) {
-                        Image(systemName: "personalhotspot")
-                    }
-                    .help("Connections")
-
-                    Button(action: { setAudioOutputMuted(!webRTCManager.audioOutputMuted) }) {
-                        Image(systemName: webRTCManager.audioOutputMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            .foregroundStyle(webRTCManager.audioOutputMuted ? Color.red : Color.primary)
-                    }
-                    .disabled(!webRTCManager.audioEnabled)
-                    .help(webRTCManager.audioEnabled ? (webRTCManager.audioOutputMuted ? "Unmute Audio Output" : "Mute Audio Output") : "Enable Audio in Settings first")
-
-                    Button(action: { setMicrophoneMuted(!webRTCManager.microphoneMuted) }) {
-                        Image(systemName: webRTCManager.microphoneMuted ? "mic.slash.fill" : "mic.fill")
-                            .foregroundStyle(webRTCManager.microphoneMuted ? Color.red : Color.primary)
-                    }
-                    .disabled(!webRTCManager.micEnabled)
-                    .help(webRTCManager.micEnabled ? (webRTCManager.microphoneMuted ? "Unmute Microphone" : "Mute Microphone") : "Enable Microphone in Settings first")
-
-                    Button(action: { isStreamPaused ? resumeStream() : pauseStream() }) {
-                        Image(systemName: isStreamPaused ? "play.fill" : "pause.fill")
-                    }
-                    .disabled(kvmDeviceManager.connectedDevice == nil || isConnectionBusy)
-                    .help(isStreamPaused ? "Resume Stream" : "Pause Stream")
-
-                    Button(action: { showingQuickPaste.toggle() }) {
-                        Image(systemName: "bolt.fill")
-                    }
-                    .help("Quick Paste")
-                    .popover(isPresented: $showingQuickPaste, arrowEdge: .bottom) {
-                        QuickPasteView()
-                    }
-
-                    Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
-                        Image(systemName: "gearshape")
-                    }
-                    .disabled(!isConnected)
-                    .help("Settings")
+            ToolbarItemGroup(placement: .automatic) {
+                Button(action: { showingConnections.toggle() }) {
+                    Image(systemName: "personalhotspot")
                 }
+                .help("Connections")
+
+                Button(action: { setAudioOutputMuted(!webRTCManager.audioOutputMuted) }) {
+                    Image(systemName: webRTCManager.audioOutputMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                        .foregroundStyle(webRTCManager.audioOutputMuted ? Color.red : Color.primary)
+                }
+                .disabled(!webRTCManager.audioEnabled)
+                .help(webRTCManager.audioEnabled ? (webRTCManager.audioOutputMuted ? "Unmute Audio Output" : "Mute Audio Output") : "Enable Audio in Settings first")
+
+                Button(action: { setMicrophoneMuted(!webRTCManager.microphoneMuted) }) {
+                    Image(systemName: webRTCManager.microphoneMuted ? "mic.slash.fill" : "mic.fill")
+                        .foregroundStyle(webRTCManager.microphoneMuted ? Color.red : Color.primary)
+                }
+                .disabled(!webRTCManager.micEnabled)
+                .help(webRTCManager.micEnabled ? (webRTCManager.microphoneMuted ? "Unmute Microphone" : "Mute Microphone") : "Enable Microphone in Settings first")
+
+                Button(action: { isStreamPaused ? resumeStream() : pauseStream() }) {
+                    Image(systemName: isStreamPaused ? "play.fill" : "pause.fill")
+                }
+                .disabled(kvmDeviceManager.connectedDevice == nil || isConnectionBusy)
+                .help(isStreamPaused ? "Resume Stream" : "Pause Stream")
+
+                Button(action: { showingQuickPaste.toggle() }) {
+                    Image(systemName: "bolt.fill")
+                }
+                .help("Quick Paste")
+                .popover(isPresented: $showingQuickPaste, arrowEdge: .bottom) {
+                    QuickPasteView()
+                }
+
+                Button(action: { withAnimation(.easeInOut(duration: 0.2)) { showingSettings.toggle() } }) {
+                    Image(systemName: "gearshape")
+                }
+                .disabled(!isConnected)
+                .help("Settings")
             }
         }
     }
@@ -875,6 +873,7 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
                 window.titlebarAppearsTransparent = false
                 window.styleMask.remove(.fullSizeContentView)
                 coordinator.attach(to: window)
+                coordinator.restoreSavedPlacementIfNeeded(window: window)
             }
         }
 
@@ -932,6 +931,12 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
         private var storedWindowedStyleMaskHadFullSizeContentView: Bool?
         private var storedWindowedTitleVisibility: NSWindow.TitleVisibility?
         private var storedWindowedToolbarIsVisible: Bool?
+        private var didRestoreSavedPlacement = false
+        private var isClosingFromFullscreen = false
+
+        private static let frameDefaultsKey = "overlook.window.frame"
+        private static let screenIDDefaultsKey = "overlook.window.screenID"
+        private static let fullscreenDefaultsKey = "overlook.window.fullscreen"
 
         func attach(to window: NSWindow) {
             if self.window === window {
@@ -951,6 +956,27 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
             }
         }
 
+        func restoreSavedPlacementIfNeeded(window: NSWindow) {
+            guard didRestoreSavedPlacement == false else { return }
+            didRestoreSavedPlacement = true
+
+            window.setFrameAutosaveName("OverlookMainWindow")
+
+            if let savedFrame = Self.savedFrame() {
+                let screen = Self.savedScreen() ?? window.screen ?? NSScreen.main
+                let restoredFrame = Self.constrainedFrame(savedFrame, on: screen)
+                window.setFrame(restoredFrame, display: true, animate: false)
+                didInitialResizeForAspect = true
+            }
+
+            guard UserDefaults.standard.bool(forKey: Self.fullscreenDefaultsKey) else { return }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                guard window.isVisible, window.styleMask.contains(.fullScreen) == false else { return }
+                window.toggleFullScreen(nil)
+            }
+        }
+
         func detach() {
             if let window, window.delegate === self {
                 window.delegate = forwardedDelegate
@@ -964,12 +990,12 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
         }
 
         private func applyFullscreenChrome(window: NSWindow) {
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = false
+            window.titleVisibility = .visible
             window.styleMask.insert(.fullSizeContentView)
-            window.toolbar?.isVisible = false
+            window.toolbar?.isVisible = true
             if #available(macOS 11.0, *) {
-                window.titlebarSeparatorStyle = .none
+                window.titlebarSeparatorStyle = .automatic
             }
         }
 
@@ -995,6 +1021,49 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
             }
         }
 
+        private func savePlacement(window: NSWindow, fullscreen: Bool? = nil) {
+            let isFullscreen = fullscreen ?? window.styleMask.contains(.fullScreen)
+            UserDefaults.standard.set(isFullscreen, forKey: Self.fullscreenDefaultsKey)
+
+            if let screenID = Self.screenID(window.screen) {
+                UserDefaults.standard.set(screenID, forKey: Self.screenIDDefaultsKey)
+            }
+
+            guard isFullscreen == false else { return }
+
+            UserDefaults.standard.set(NSStringFromRect(window.frame), forKey: Self.frameDefaultsKey)
+        }
+
+        private static func savedFrame() -> NSRect? {
+            guard let string = UserDefaults.standard.string(forKey: frameDefaultsKey) else { return nil }
+            let frame = NSRectFromString(string)
+            guard frame.width > 0, frame.height > 0 else { return nil }
+            return frame
+        }
+
+        private static func savedScreen() -> NSScreen? {
+            guard UserDefaults.standard.object(forKey: screenIDDefaultsKey) != nil else { return nil }
+            let savedID = UserDefaults.standard.integer(forKey: screenIDDefaultsKey)
+            return NSScreen.screens.first { screenID($0) == savedID }
+        }
+
+        private static func screenID(_ screen: NSScreen?) -> Int? {
+            let key = NSDeviceDescriptionKey("NSScreenNumber")
+            return (screen?.deviceDescription[key] as? NSNumber)?.intValue
+        }
+
+        private static func constrainedFrame(_ frame: NSRect, on screen: NSScreen?) -> NSRect {
+            guard let screen else { return frame }
+
+            let visible = screen.visibleFrame
+            let width = min(max(frame.width, 640), visible.width)
+            let height = min(max(frame.height, 420), visible.height)
+            let x = min(max(frame.minX, visible.minX), visible.maxX - width)
+            let y = min(max(frame.minY, visible.minY), visible.maxY - height)
+
+            return NSRect(x: x, y: y, width: width, height: height)
+        }
+
         private func adjustFrameToVideoAspect(window: NSWindow) {
             guard let aspect = videoAspect, aspect.isFinite, aspect > 0 else { return }
 
@@ -1017,6 +1086,33 @@ private struct WindowAspectRatioSetter: NSViewRepresentable {
 }
 
 extension WindowAspectRatioSetter.Coordinator: NSWindowDelegate {
+    func window(_ window: NSWindow, willUseFullScreenPresentationOptions proposedOptions: NSApplication.PresentationOptions = []) -> NSApplication.PresentationOptions {
+        var options = proposedOptions
+        options.insert(.autoHideToolbar)
+        return options
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        isClosingFromFullscreen = sender.styleMask.contains(.fullScreen)
+        if isClosingFromFullscreen {
+            savePlacement(window: sender, fullscreen: true)
+        }
+
+        if let forwardedDelegate,
+           forwardedDelegate.responds(to: #selector(NSWindowDelegate.windowShouldClose(_:))) {
+            return forwardedDelegate.windowShouldClose?(sender) ?? true
+        }
+
+        return true
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            savePlacement(window: window)
+        }
+        forwardedDelegate?.windowDidMove?(notification)
+    }
+
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         guard let aspect = videoAspect else { return frameSize }
 
@@ -1052,12 +1148,24 @@ extension WindowAspectRatioSetter.Coordinator: NSWindowDelegate {
     }
 
     func windowDidResize(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            savePlacement(window: window)
+        }
         forwardedDelegate?.windowDidResize?(notification)
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            savePlacement(window: window, fullscreen: isClosingFromFullscreen ? true : nil)
+        }
         forwardedDelegate?.windowWillClose?(notification)
-        detach()
+    }
+
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            savePlacement(window: window, fullscreen: false)
+        }
+        forwardedDelegate?.windowWillEnterFullScreen?(notification)
     }
 
     func windowDidEnterFullScreen(_ notification: Notification) {
@@ -1065,8 +1173,16 @@ extension WindowAspectRatioSetter.Coordinator: NSWindowDelegate {
             forwardedDelegate?.windowDidEnterFullScreen?(notification)
             return
         }
+        savePlacement(window: window, fullscreen: true)
         applyFullscreenChrome(window: window)
         forwardedDelegate?.windowDidEnterFullScreen?(notification)
+    }
+
+    func windowWillExitFullScreen(_ notification: Notification) {
+        if let window = notification.object as? NSWindow {
+            savePlacement(window: window, fullscreen: isClosingFromFullscreen ? true : false)
+        }
+        forwardedDelegate?.windowWillExitFullScreen?(notification)
     }
 
     func windowDidExitFullScreen(_ notification: Notification) {
@@ -1075,10 +1191,13 @@ extension WindowAspectRatioSetter.Coordinator: NSWindowDelegate {
             return
         }
         restoreWindowedChrome(window: window)
+        savePlacement(window: window, fullscreen: isClosingFromFullscreen ? true : false)
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+            guard self.isClosingFromFullscreen == false else { return }
             self.adjustFrameToVideoAspect(window: window)
+            self.savePlacement(window: window, fullscreen: false)
         }
 
         forwardedDelegate?.windowDidExitFullScreen?(notification)
@@ -1098,9 +1217,7 @@ private struct WindowTitleSetter: NSViewRepresentable {
             if window.title != title {
                 window.title = title
             }
-            if window.styleMask.contains(.fullScreen) == false {
-                window.titleVisibility = .visible
-            }
+            window.titleVisibility = .visible
         }
     }
 }

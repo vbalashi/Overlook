@@ -146,8 +146,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     let kvmDeviceManager = KVMDeviceManager()
     let quickPasteManager = QuickPasteManager()
     let agentServerManager = AgentServerManager()
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSWindow.allowsAutomaticWindowTabbing = false
         OverlookLog.info("Application launched. logPath=\(OverlookLog.fileURL.path)")
         agentServerManager.setup(inputManager: inputManager, kvmDeviceManager: kvmDeviceManager, webRTCManager: webRTCManager)
         if UserDefaults.standard.bool(forKey: AgentServerManager.enabledDefaultsKey) {
@@ -186,6 +191,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let windows = NSApp.windows
         let candidate = windows.first(where: { $0.canBecomeKey && $0.isVisible }) ?? windows.first(where: { $0.canBecomeKey })
         candidate?.makeKeyAndOrderFront(nil)
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
     }
     
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
