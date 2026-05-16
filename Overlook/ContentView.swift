@@ -30,6 +30,11 @@ struct ContentView: View {
     @State private var isConnectionBusy = false
     @State private var connectionErrorMessage: String?
     @State private var showingQuickPaste = false
+    @State private var isStreamPaused = false
+    @State private var pausedStreamDevice: KVMDevice?
+    @State private var hiddenStreamSnapshot: HiddenStreamSnapshot?
+    @State private var hiddenStreamTask: Task<Void, Never>?
+    @State private var isWindowStreamVisible = true
 
     @State private var pausedCaptureKeyboardWasEnabled: Bool?
     @State private var pausedCaptureMouseWasEnabled: Bool?
@@ -41,6 +46,16 @@ struct ContentView: View {
 
     @AppStorage("overlook.appAppearance") private var appAppearance: String = "system"
     @AppStorage("overlook.autoResumeLastConnection") private var autoResumeLastConnection: Bool = false
+    @AppStorage("overlook.reduceHiddenStreamQuality") private var reduceHiddenStreamQuality: Bool = true
+
+    private struct HiddenStreamSnapshot {
+        let desiredFps: Int?
+        let quality: Int?
+        let h264Bitrate: Int?
+        let h264Gop: Int?
+        let zeroDelay: Bool?
+        let resolution: String?
+    }
 
     private var preferredColorScheme: ColorScheme? {
         switch appAppearance {
@@ -128,6 +143,28 @@ struct ContentView: View {
                 .allowsHitTesting(!showingSettings)
             }
 
+            if isStreamPaused {
+                VStack(spacing: 10) {
+                    Text("Stream Paused")
+                        .font(.headline)
+
+                    Text("The device session is still active.")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+
+                    Button("Resume Stream") {
+                        resumeStream()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isConnectionBusy)
+                }
+                .padding(14)
+                .background(.ultraThinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding()
+            }
+
             if showingSettings || showingConnections {
                 Color.black.opacity(0.18)
                     .ignoresSafeArea()
@@ -209,6 +246,7 @@ struct ContentView: View {
             inputManager.setGLKVMClient(kvmDeviceManager.glkvmClient)
 
             updateInputCaptureForUIOverlays()
+            updateWindowStreamVisibility()
 
             if autoResumeLastConnection, let lastDevice = kvmDeviceManager.lastConnectedDevice {
                 didAutoOpenConnections = true
@@ -229,21 +267,46 @@ struct ContentView: View {
         }
         .onChange(of: windowRef) { _, newValue in
             isFullscreen = newValue?.styleMask.contains(.fullScreen) ?? false
+            updateWindowStreamVisibility()
+        }
+        .onChange(of: reduceHiddenStreamQuality) { _, _ in
+            scheduleHiddenStreamQualityUpdate()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { note in
             guard let window = note.object as? NSWindow else { return }
             windowRef = window
             window.toolbar?.isVisible = false
             isFullscreen = true
+            updateWindowStreamVisibility()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didExitFullScreenNotification)) { note in
             guard let window = note.object as? NSWindow else { return }
             windowRef = window
             window.toolbar?.isVisible = true
             isFullscreen = false
+            updateWindowStreamVisibility()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didMiniaturizeNotification)) { note in
+            guard (note.object as? NSWindow) === windowRef else { return }
+            updateWindowStreamVisibility()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didDeminiaturizeNotification)) { note in
+            guard (note.object as? NSWindow) === windowRef else { return }
+            updateWindowStreamVisibility()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { note in
+            guard (note.object as? NSWindow) === windowRef else { return }
+            updateWindowStreamVisibility()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didHideNotification)) { _ in
+            updateWindowStreamVisibility()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didUnhideNotification)) { _ in
+            updateWindowStreamVisibility()
         }
         .onReceive(kvmDeviceManager.$glkvmClient) { client in
             inputManager.setGLKVMClient(client)
+            scheduleHiddenStreamQualityUpdate()
         }
         .onReceive(kvmDeviceManager.$connectedDevice) { device in
             Task { @MainActor in
@@ -256,7 +319,11 @@ struct ContentView: View {
                     }
                 } else {
                     isConnected = false
+                    isStreamPaused = false
+                    pausedStreamDevice = nil
+                    hiddenStreamSnapshot = nil
                 }
+                scheduleHiddenStreamQualityUpdate()
             }
         }
         .onChange(of: appAppearance) { _, _ in
@@ -325,6 +392,12 @@ struct ContentView: View {
                     .disabled(!webRTCManager.micEnabled)
                     .help(webRTCManager.micEnabled ? (webRTCManager.microphoneMuted ? "Unmute Microphone" : "Mute Microphone") : "Enable Microphone in Settings first")
 
+                    Button(action: { isStreamPaused ? resumeStream() : pauseStream() }) {
+                        Image(systemName: isStreamPaused ? "play.fill" : "pause.fill")
+                    }
+                    .disabled(kvmDeviceManager.connectedDevice == nil || isConnectionBusy)
+                    .help(isStreamPaused ? "Resume Stream" : "Pause Stream")
+
                     Button(action: { showingQuickPaste.toggle() }) {
                         Image(systemName: "bolt.fill")
                     }
@@ -361,6 +434,8 @@ struct ContentView: View {
                 suppressDeviceAutoConnect = true
                 selectedDevice = connectedDevice
                 isConnected = true
+                isStreamPaused = false
+                pausedStreamDevice = nil
                 showingConnections = false
                 DispatchQueue.main.async {
                     suppressDeviceAutoConnect = false
@@ -421,13 +496,13 @@ struct ContentView: View {
 
         let client = kvmDeviceManager.glkvmClient
 
-        webRTCManager.disconnect()
-        inputManager.setGLKVMClient(nil)
-        inputManager.stopFullInputCapture()
-        kvmDeviceManager.disconnectFromDevice()
-        isConnected = false
-
         Task { @MainActor in
+            await restoreHiddenStreamQualityIfNeeded()
+            webRTCManager.disconnect()
+            inputManager.setGLKVMClient(nil)
+            inputManager.stopFullInputCapture()
+            kvmDeviceManager.disconnectFromDevice()
+            isConnected = false
             try? await client?.setHidConnected(false)
             try? await Task.sleep(nanoseconds: 300_000_000)
             connectToDevice(device)
@@ -478,18 +553,24 @@ struct ContentView: View {
     private func toggleConnection() {
         if isConnected {
             connectionErrorMessage = nil
-            webRTCManager.disconnect()
+            isStreamPaused = false
+            pausedStreamDevice = nil
+            hiddenStreamTask?.cancel()
+            hiddenStreamTask = nil
 
             let client = kvmDeviceManager.glkvmClient
-            Task {
+            isConnectionBusy = true
+            Task { @MainActor in
+                defer { isConnectionBusy = false }
+                await restoreHiddenStreamQualityIfNeeded()
+                webRTCManager.disconnect()
                 try? await client?.setHidConnected(false)
+                kvmDeviceManager.disconnectFromDevice()
+                inputManager.setGLKVMClient(nil)
+                inputManager.stopFullInputCapture()
+                isConnected = false
+                showingConnections = true
             }
-
-            kvmDeviceManager.disconnectFromDevice()
-            inputManager.setGLKVMClient(nil)
-            inputManager.stopFullInputCapture()
-            isConnected = false
-            showingConnections = true
         } else if let device = deviceForConnection() {
             connectToDevice(device)
         } else {
@@ -505,6 +586,183 @@ struct ContentView: View {
             return kvmDeviceManager.availableDevices[0]
         }
         return nil
+    }
+
+    @MainActor
+    private func pauseStream() {
+        guard isStreamPaused == false else { return }
+        guard let device = kvmDeviceManager.connectedDevice ?? selectedDevice else {
+            connectionErrorMessage = "Select a device before pausing the stream."
+            return
+        }
+
+        hiddenStreamTask?.cancel()
+        hiddenStreamTask = nil
+        pausedStreamDevice = device
+        isStreamPaused = true
+        OverlookLog.info("Manual stream pause requested; keeping KVM session active host=\(device.host) port=\(device.port)")
+
+        Task { @MainActor in
+            await restoreHiddenStreamQualityIfNeeded()
+            webRTCManager.disconnect()
+            inputManager.stopFullInputCapture()
+        }
+    }
+
+    @MainActor
+    private func resumeStream() {
+        guard isStreamPaused else { return }
+        guard let device = pausedStreamDevice ?? kvmDeviceManager.connectedDevice ?? selectedDevice else {
+            connectionErrorMessage = "Select a device before resuming the stream."
+            return
+        }
+
+        isConnectionBusy = true
+        connectionErrorMessage = nil
+
+        Task { @MainActor in
+            defer { isConnectionBusy = false }
+            do {
+                try await webRTCManager.connect(to: device)
+                if kvmDeviceManager.glkvmClient != nil {
+                    inputManager.setGLKVMClient(kvmDeviceManager.glkvmClient)
+                    inputManager.startFullInputCapture()
+                }
+                isStreamPaused = false
+                pausedStreamDevice = nil
+                isConnected = true
+                scheduleHiddenStreamQualityUpdate()
+                OverlookLog.info("Manual stream resume succeeded host=\(device.host) port=\(device.port)")
+            } catch {
+                connectionErrorMessage = "Failed to resume WebRTC stream: \(connectionErrorDetail(error))"
+                OverlookLog.error("Manual stream resume failed host=\(device.host) port=\(device.port) error=\(OverlookLog.describe(error))")
+            }
+        }
+    }
+
+    @MainActor
+    private func updateWindowStreamVisibility() {
+        let window = windowRef ?? NSApp.keyWindow
+        let isActuallyVisible = window?.isVisible == true
+            && window?.isMiniaturized == false
+            && window?.occlusionState.contains(.visible) == true
+            && NSApp.isHidden == false
+
+        guard isWindowStreamVisible != isActuallyVisible else { return }
+        isWindowStreamVisible = isActuallyVisible
+        scheduleHiddenStreamQualityUpdate()
+    }
+
+    @MainActor
+    private func scheduleHiddenStreamQualityUpdate() {
+        hiddenStreamTask?.cancel()
+        hiddenStreamTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+
+            guard reduceHiddenStreamQuality else {
+                await restoreHiddenStreamQualityIfNeeded()
+                return
+            }
+
+            guard isConnected, isStreamPaused == false, kvmDeviceManager.glkvmClient != nil else {
+                await restoreHiddenStreamQualityIfNeeded()
+                return
+            }
+
+            if isWindowStreamVisible {
+                await restoreHiddenStreamQualityIfNeeded()
+            } else {
+                await reduceHiddenStreamQualityIfNeeded()
+            }
+        }
+    }
+
+    @MainActor
+    private func reduceHiddenStreamQualityIfNeeded() async {
+        guard hiddenStreamSnapshot == nil else { return }
+        guard let client = kvmDeviceManager.glkvmClient else { return }
+
+        do {
+            let state = try await client.getStreamerState()
+            guard let current = state.params else { return }
+
+            hiddenStreamSnapshot = HiddenStreamSnapshot(
+                desiredFps: current.desiredFps,
+                quality: current.quality,
+                h264Bitrate: current.h264Bitrate,
+                h264Gop: current.h264Gop,
+                zeroDelay: current.zeroDelay,
+                resolution: current.resolution
+            )
+
+            var params: [String: String] = [:]
+            if let limits = state.limits {
+                params["desired_fps"] = String(clamp(5, min: limits.desiredFps.min, max: limits.desiredFps.max))
+                if state.features?.h264 != false {
+                    params["h264_bitrate"] = String(clamp(350, min: limits.h264Bitrate.min, max: limits.h264Bitrate.max))
+                    params["h264_gop"] = String(clamp(30, min: limits.h264Gop.min, max: limits.h264Gop.max))
+                }
+            } else if current.desiredFps != nil {
+                params["desired_fps"] = "5"
+            }
+
+            if state.features?.quality != false, current.quality != nil {
+                params["quality"] = "20"
+            }
+
+            guard params.isEmpty == false else {
+                hiddenStreamSnapshot = nil
+                return
+            }
+
+            try await client.setStreamerParams(params)
+            OverlookLog.info("Hidden window stream reduction applied params=\(params)")
+        } catch {
+            hiddenStreamSnapshot = nil
+            OverlookLog.error("Hidden window stream reduction failed error=\(OverlookLog.describe(error))")
+        }
+    }
+
+    @MainActor
+    private func restoreHiddenStreamQualityIfNeeded() async {
+        guard let snapshot = hiddenStreamSnapshot else { return }
+        hiddenStreamSnapshot = nil
+        guard let client = kvmDeviceManager.glkvmClient else { return }
+
+        var params: [String: String] = [:]
+        if let desiredFps = snapshot.desiredFps {
+            params["desired_fps"] = String(desiredFps)
+        }
+        if let quality = snapshot.quality {
+            params["quality"] = String(quality)
+        }
+        if let bitrate = snapshot.h264Bitrate {
+            params["h264_bitrate"] = String(bitrate)
+        }
+        if let gop = snapshot.h264Gop {
+            params["h264_gop"] = String(gop)
+        }
+        if let zeroDelay = snapshot.zeroDelay {
+            params["zero_delay"] = zeroDelay ? "true" : "false"
+        }
+        if let resolution = snapshot.resolution?.trimmingCharacters(in: .whitespacesAndNewlines),
+           resolution.isEmpty == false {
+            params["resolution"] = resolution
+        }
+
+        guard params.isEmpty == false else { return }
+
+        do {
+            try await client.setStreamerParams(params)
+            OverlookLog.info("Hidden window stream settings restored")
+        } catch {
+            OverlookLog.error("Hidden window stream settings restore failed error=\(OverlookLog.describe(error))")
+            connectionErrorMessage = "Failed to restore stream quality after hidden-window reduction: \(connectionErrorDetail(error))"
+        }
+    }
+
+    private func clamp(_ value: Int, min minValue: Int, max maxValue: Int) -> Int {
+        Swift.max(minValue, Swift.min(maxValue, value))
     }
     
     @MainActor

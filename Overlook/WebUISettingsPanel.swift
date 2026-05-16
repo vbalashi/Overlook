@@ -12,6 +12,7 @@ struct WebUISettingsPanel: View {
     @AppStorage("overlook.appAppearance") private var appAppearance: String = "system"
     @AppStorage(TrackingContainerView.hideSystemCursorDefaultsKey) private var hideSystemCursorOverStream: Bool = false
     @AppStorage("overlook.autoResumeLastConnection") private var autoResumeLastConnection: Bool = false
+    @AppStorage("overlook.reduceHiddenStreamQuality") private var reduceHiddenStreamQuality: Bool = true
 
     @AppStorage("overlook.audio.inputDeviceUID") private var audioInputDeviceUID: String = ""
     @AppStorage("overlook.audio.outputDeviceUID") private var audioOutputDeviceUID: String = ""
@@ -379,6 +380,7 @@ struct WebUISettingsPanel: View {
                             ))
 
                             Toggle("Hide system cursor over stream", isOn: $hideSystemCursorOverStream)
+                            Toggle("Reduce stream when hidden", isOn: $reduceHiddenStreamQuality)
 
                             if selectedVideoQualityPreset == videoQualityCustomTag {
                                 VStack(alignment: .leading, spacing: 8) {
