@@ -174,7 +174,6 @@ class WebRTCManager: NSObject, ObservableObject {
     private var isFrameRendererAttached = false
     private var lastFrameCaptureTime: CFTimeInterval = 0
 
-    private let letterboxDetector = LetterboxDetector()
     private var letterboxDetectionTask: Task<Void, Never>?
     private static let letterboxDetectionIntervalSeconds: UInt64 = 2_000_000_000
     
@@ -587,12 +586,16 @@ class WebRTCManager: NSObject, ObservableObject {
     }
 
     func captureCurrentFrame(timeout: TimeInterval = 1.0) async -> CVPixelBuffer? {
+        await captureCurrentFrame(reason: .snapshot, timeout: timeout)
+    }
+
+    private func captureCurrentFrame(reason: FrameCaptureReason, timeout: TimeInterval = 1.0) async -> CVPixelBuffer? {
         if let currentFrame {
             return currentFrame
         }
 
-        setFrameCaptureActive(.snapshot, true)
-        defer { setFrameCaptureActive(.snapshot, false) }
+        setFrameCaptureActive(reason, true)
+        defer { setFrameCaptureActive(reason, false) }
 
         let deadline = CACurrentMediaTime() + timeout
         while CACurrentMediaTime() < deadline {
@@ -1783,18 +1786,17 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
 
     private func startLetterboxDetectionTask() {
         guard letterboxDetectionTask == nil else { return }
-        letterboxDetector.reset()
-        setFrameCaptureActive(.letterbox, true)
         let intervalNs = Self.letterboxDetectionIntervalSeconds
         let initialDelayNs: UInt64 = 800_000_000
         let maxSampleAttempts = 6
         letterboxDetectionTask = Task.detached(priority: .utility) { [weak self] in
             try? await Task.sleep(nanoseconds: initialDelayNs)
+            let detector = LetterboxDetector()
             var attemptsRemaining = maxSampleAttempts
             while !Task.isCancelled, attemptsRemaining > 0 {
                 guard let self else { return }
-                let frame = await MainActor.run { self.currentFrame }
-                if let frame, let detected = self.letterboxDetector.sample(frame) {
+                let frame = await self.captureCurrentFrame(reason: .letterbox, timeout: 0.6)
+                if let frame, let detected = detector.sample(frame) {
                     let resolved = Self.resolvedLetterboxContentRect(from: detected)
                     await MainActor.run {
                         if self.sourceContentRectInVideo != resolved {
@@ -1812,8 +1814,8 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
                 attemptsRemaining -= 1
                 try? await Task.sleep(nanoseconds: intervalNs)
             }
-            await MainActor.run {
-                self?.finishLetterboxDetectionTask()
+            if let self {
+                await self.finishLetterboxDetectionTask()
             }
         }
     }
