@@ -33,5 +33,7 @@
 	<string>Overlook connects to KVM devices on your local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Overlook needs microphone access to send audio to the remote device.</string>
+	<key>OverlookGitCommit</key>
+	<string>$(OVERLOOK_GIT_COMMIT)</string>
 </dict>
 </plist>

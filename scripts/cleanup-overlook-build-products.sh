@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="Overlook.app"
+APP_NAMES=("Overlook.app" "Overlook Debug.app")
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DERIVED_DATA_DIR="${DERIVED_DATA_DIR:-$HOME/Library/Developer/Xcode/DerivedData}"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
@@ -12,8 +12,8 @@ Usage: scripts/cleanup-overlook-build-products.sh [--dry-run] [--keep APP_PATH] 
 
 Removes local Overlook build products that can appear as duplicate apps in
 Spotlight or LaunchServices:
-  - build/debug/Overlook.app and build/release/Overlook.app in this checkout
-  - Xcode DerivedData Build/Products Overlook.app bundles
+  - build/debug and build/release Overlook app bundles in this checkout
+  - Xcode DerivedData Build/Products Overlook app bundles
 
 Use --keep APP_PATH after a build to preserve the canonical app bundle while
 removing every other local build product. Use --check to fail if any duplicate
@@ -94,14 +94,18 @@ remove_app() {
 
 FAILED=0
 
-remove_app "$ROOT_DIR/build/debug/$APP_NAME" || FAILED=1
-remove_app "$ROOT_DIR/build/release/$APP_NAME" || FAILED=1
+for app_name in "${APP_NAMES[@]}"; do
+  remove_app "$ROOT_DIR/build/debug/$app_name" || FAILED=1
+  remove_app "$ROOT_DIR/build/release/$app_name" || FAILED=1
+done
 
 if [[ -d "$DERIVED_DATA_DIR" ]]; then
-  while IFS= read -r app; do
-    [[ -n "$app" ]] || continue
-    remove_app "$app" || FAILED=1
-  done < <(find "$DERIVED_DATA_DIR" -path "*/Build/Products/*/$APP_NAME" -type d -prune 2>/dev/null)
+  for app_name in "${APP_NAMES[@]}"; do
+    while IFS= read -r app; do
+      [[ -n "$app" ]] || continue
+      remove_app "$app" || FAILED=1
+    done < <(find "$DERIVED_DATA_DIR" -path "*/Build/Products/*/$app_name" -type d -prune 2>/dev/null)
+  done
 fi
 
 if [[ "$FAILED" -ne 0 ]]; then

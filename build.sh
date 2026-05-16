@@ -36,7 +36,18 @@ done
 cd "$(dirname "$0")"
 
 DEST_DIR="build/$(echo "$CONFIG" | tr '[:upper:]' '[:lower:]')"
-APP_NAME="Overlook.app"
+if [[ "$CONFIG" == "Debug" ]]; then
+  PRODUCT_NAME_OVERRIDE="Overlook Debug"
+  BUNDLE_ID_OVERRIDE="com.overlook.app.debug"
+else
+  PRODUCT_NAME_OVERRIDE="Overlook"
+  BUNDLE_ID_OVERRIDE="com.overlook.app"
+fi
+
+GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo local)"
+if ! git diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then
+  GIT_COMMIT="${GIT_COMMIT}-dirty"
+fi
 
 run_xcodebuild() {
   xcodebuild \
@@ -48,6 +59,9 @@ run_xcodebuild() {
     CODE_SIGN_IDENTITY="" \
     DEVELOPMENT_TEAM="" \
     ENABLE_DEBUG_DYLIB=NO \
+    PRODUCT_NAME="$PRODUCT_NAME_OVERRIDE" \
+    PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID_OVERRIDE" \
+    OVERLOOK_GIT_COMMIT="$GIT_COMMIT" \
     "$@"
 }
 

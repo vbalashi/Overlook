@@ -10,7 +10,7 @@
 
 **Spec:** [docs/superpowers/specs/2026-05-07-remote-key-routing-and-snippet-ocr-design.md](../specs/2026-05-07-remote-key-routing-and-snippet-ocr-design.md)
 
-**Note on testing:** The repo has no unit-test harness and the logic lives in event/view layers that are hard to isolate, so each task uses a build-then-manual-verify loop via `./build.sh` against a live GLKVM device. Where behavior can only be observed end-to-end, verification is deferred to the final smoke-test task.
+**Note on testing:** The repo has no unit-test harness and the logic lives in event/view layers that are hard to isolate, so each task uses a build-then-manual-verify loop via `./build.sh -c debug` against a live GLKVM device. Where behavior can only be observed end-to-end, verification is deferred to the final smoke-test task.
 
 ---
 
@@ -84,10 +84,10 @@ Then, as a new public method immediately above the `func setup(with webRTCManage
 Run:
 
 ```bash
-./build.sh
+./build.sh -c debug
 ```
 
-Expected: `BUILD SUCCEEDED` and `Copied Overlook.app -> build/debug/`. No new warnings other than possible "unused" hints for `isSnippetModeActive` (it is `@Published`, so the warning should not fire).
+Expected: `BUILD SUCCEEDED` and `Copied Overlook Debug.app -> build/debug/`. No new warnings other than possible "unused" hints for `isSnippetModeActive` (it is `@Published`, so the warning should not fire).
 
 - [ ] **Step 1.4: Commit**
 
@@ -317,14 +317,14 @@ This preserves the existing `.flagsChanged` logic verbatim (now extracted into `
 Run:
 
 ```bash
-./build.sh
+./build.sh -c debug
 ```
 
 Expected: `BUILD SUCCEEDED`.
 
 - [ ] **Step 2.4: Manual smoke test (routing only, not the snippet UI)**
 
-Open the built app (`open build/debug/Overlook.app`), connect to a GLKVM device, ensure keyboard capture is active, then:
+Open the built app (`open build/debug/Overlook Debug.app`), connect to a GLKVM device, ensure keyboard capture is active, then:
 
 - Press `cmd+C` with a terminal focused on the remote. Expected: remote receives `Meta+C` (observe via remote-side echo / selection-copy / etc., whatever fits your device). The Mac clipboard should NOT change.
 - Press `cmd+V` with a remote text field focused. Expected: remote receives `Meta+V`. The old "type Mac clipboard as HID text" behavior is gone.
@@ -400,7 +400,7 @@ Leave `OCRSelectionOverlay` and `OCRResultView` alone for now — they are remov
 - [ ] **Step 3.2: Verify the build**
 
 ```bash
-./build.sh
+./build.sh -c debug
 ```
 
 Expected: `BUILD SUCCEEDED`.
@@ -824,7 +824,7 @@ Leave the `@EnvironmentObject var ocrManager: OCRManager` declaration at line 8 
 - [ ] **Step 4.5: Verify the build**
 
 ```bash
-./build.sh
+./build.sh -c debug
 ```
 
 Expected: `BUILD SUCCEEDED`. If the compiler complains about unused `selectedText`, `isShowingOCRResult`, `isOCRModeEnabled`, or `toggleOCR`, you missed one of the deletions above — remove the offending reference.
@@ -900,7 +900,7 @@ The resulting `switch` should keep cases `9` (Quick Connect) and `15` (Scan Devi
 - [ ] **Step 5.4: Verify the build**
 
 ```bash
-./build.sh
+./build.sh -c debug
 ```
 
 Expected: `BUILD SUCCEEDED`.
@@ -1195,7 +1195,7 @@ extension Notification.Name {
 - [ ] **Step 6.4: Verify the build**
 
 ```bash
-./build.sh
+./build.sh -c debug
 ```
 
 Expected: `BUILD SUCCEEDED`. If the compiler reports a reference to `TextRegion`, `OCRResultView`, `OCRSelectionOverlay`, `detectTextRegions`, `recognizedRegions`, `getTextAtLocation`, `recognizeText(at:in:)`, or `overlookToggleCopyMode`, there is a straggler that was not removed in Tasks 4–5 — fix the reference before moving on.

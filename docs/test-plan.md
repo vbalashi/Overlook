@@ -25,19 +25,22 @@ Expected:
 
 - Xcode resolves the WebRTC package.
 - Build succeeds.
-- App is copied to `build/debug/Overlook.app`.
+- App is copied to `build/debug/Overlook Debug.app`.
 - Duplicate build-product guardrail passes:
 
 ```bash
-scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook.app" --check
+scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook Debug.app" --check
 ```
 
 Expected: `No duplicate Overlook build products found.`
 
-Use `./build.sh` for local builds. If you run raw `xcodebuild`, immediately run:
+Use `./build.sh -c debug` for local harness builds. Do not run raw
+`xcodebuild` for day-to-day checks; the wrapper sets the debug bundle identity,
+stamps the git commit, and cleans duplicate Spotlight/LaunchServices entries.
+If raw `xcodebuild` was run accidentally, immediately run:
 
 ```bash
-scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook.app"
+scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook Debug.app"
 ```
 
 If build fails, check first:
@@ -51,7 +54,7 @@ If build fails, check first:
 
 ## Manual App Smoke Test
 
-1. Launch `build/debug/Overlook.app`.
+1. Launch `build/debug/Overlook Debug.app`.
 2. Open the Connections popover.
 3. Run scan.
 4. Connect to a discovered device.
