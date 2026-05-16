@@ -67,6 +67,30 @@ class MenuBarAgent: NSObject, ObservableObject {
                 self.updateDeviceMenu()
             }
             .store(in: &cancellables)
+
+        webRTCManager.$audioEnabled
+            .sink { [weak self] _ in
+                self?.updateAudioMenuItems()
+            }
+            .store(in: &cancellables)
+
+        webRTCManager.$micEnabled
+            .sink { [weak self] _ in
+                self?.updateAudioMenuItems()
+            }
+            .store(in: &cancellables)
+
+        webRTCManager.$audioOutputMuted
+            .sink { [weak self] _ in
+                self?.updateAudioMenuItems()
+            }
+            .store(in: &cancellables)
+
+        webRTCManager.$microphoneMuted
+            .sink { [weak self] _ in
+                self?.updateAudioMenuItems()
+            }
+            .store(in: &cancellables)
     }
     
     private func createStatusItem() {
@@ -109,6 +133,18 @@ class MenuBarAgent: NSObject, ObservableObject {
         menu?.addItem(disconnectItem)
         
         menu?.addItem(NSMenuItem.separator())
+
+        let audioOutputItem = NSMenuItem(title: "Audio Output", action: #selector(toggleAudioOutputAction), keyEquivalent: "")
+        audioOutputItem.target = self
+        audioOutputItem.tag = 102
+        menu?.addItem(audioOutputItem)
+
+        let microphoneItem = NSMenuItem(title: "Microphone", action: #selector(toggleMicrophoneAction), keyEquivalent: "")
+        microphoneItem.target = self
+        microphoneItem.tag = 103
+        menu?.addItem(microphoneItem)
+
+        menu?.addItem(NSMenuItem.separator())
         
         // Quick actions
         let connectItem = NSMenuItem(title: "Quick Connect", action: #selector(showQuickConnect), keyEquivalent: "k")
@@ -134,6 +170,7 @@ class MenuBarAgent: NSObject, ObservableObject {
         menu?.addItem(quitItem)
 
         updateStatusMenuItem()
+        updateAudioMenuItems()
     }
     
     private func createDeviceMenu() -> NSMenu {
@@ -237,6 +274,28 @@ class MenuBarAgent: NSObject, ObservableObject {
         }
         if let disconnectItem = menu?.items.first(where: { $0.tag == 101 }) {
             disconnectItem.isEnabled = (kvmDeviceManager.connectedDevice != nil)
+        }
+    }
+
+    private func updateAudioMenuItems() {
+        if let audioItem = menu?.items.first(where: { $0.tag == 102 }) {
+            audioItem.title = webRTCManager.audioOutputMuted ? "Audio Output Muted" : "Audio Output"
+            audioItem.state = webRTCManager.audioOutputMuted ? .off : .on
+            audioItem.isEnabled = webRTCManager.audioEnabled
+            audioItem.image = NSImage(
+                systemSymbolName: webRTCManager.audioOutputMuted ? "speaker.slash" : "speaker.wave.2",
+                accessibilityDescription: audioItem.title
+            )
+        }
+
+        if let micItem = menu?.items.first(where: { $0.tag == 103 }) {
+            micItem.title = webRTCManager.microphoneMuted ? "Microphone Muted" : "Microphone"
+            micItem.state = webRTCManager.microphoneMuted ? .off : .on
+            micItem.isEnabled = webRTCManager.micEnabled
+            micItem.image = NSImage(
+                systemSymbolName: webRTCManager.microphoneMuted ? "mic.slash" : "mic",
+                accessibilityDescription: micItem.title
+            )
         }
     }
 
@@ -360,6 +419,14 @@ class MenuBarAgent: NSObject, ObservableObject {
 
     @objc private func disconnectAction() {
         disconnectSession()
+    }
+
+    @objc private func toggleAudioOutputAction() {
+        webRTCManager.setAudioOutputMuted(!webRTCManager.audioOutputMuted)
+    }
+
+    @objc private func toggleMicrophoneAction() {
+        webRTCManager.setMicrophoneMuted(!webRTCManager.microphoneMuted)
     }
 
     private func disconnectSession() {

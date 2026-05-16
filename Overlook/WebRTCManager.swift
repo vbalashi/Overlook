@@ -88,8 +88,26 @@ class WebRTCManager: NSObject, ObservableObject {
     @Published var inboundAudioJitterMs: Int?
     @Published var inboundAudioPacketsLost: Int?
     @Published var audioIceCurrentRoundTripTimeMs: Int?
-    @Published var audioEnabled = false
-    @Published var micEnabled = false
+    @Published var audioEnabled: Bool = UserDefaults.standard.bool(forKey: audioEnabledDefaultsKey) {
+        didSet {
+            UserDefaults.standard.set(audioEnabled, forKey: Self.audioEnabledDefaultsKey)
+        }
+    }
+    @Published var micEnabled: Bool = UserDefaults.standard.bool(forKey: micEnabledDefaultsKey) {
+        didSet {
+            UserDefaults.standard.set(micEnabled, forKey: Self.micEnabledDefaultsKey)
+        }
+    }
+    @Published var audioOutputMuted: Bool = false {
+        didSet {
+            applyAudioMuteState()
+        }
+    }
+    @Published var microphoneMuted: Bool = false {
+        didSet {
+            applyAudioMuteState()
+        }
+    }
     @Published var preferLowLatencyPlayout = true
     @Published var isConnecting = false
     @Published var hasEverConnectedToStream = false
@@ -100,6 +118,7 @@ class WebRTCManager: NSObject, ObservableObject {
     private var peerConnection: RTCPeerConnection?
     private var audioPeerConnection: RTCPeerConnection?
     private var videoTrack: RTCVideoTrack?
+    private var remoteAudioTrack: RTCAudioTrack?
     private var localAudioTrack: RTCAudioTrack?
     private var localAudioSender: RTCRtpSender?
     private var dataChannel: RTCDataChannel?
@@ -139,6 +158,8 @@ class WebRTCManager: NSObject, ObservableObject {
 
     private var lastPlayoutHintApplyTime: TimeInterval?
 
+    private static let audioEnabledDefaultsKey = "overlook.audio.enabled"
+    private static let micEnabledDefaultsKey = "overlook.audio.micEnabled"
     private let audioInputDeviceUIDDefaultsKey = "overlook.audio.inputDeviceUID"
     private let audioOutputDeviceUIDDefaultsKey = "overlook.audio.outputDeviceUID"
 
@@ -658,6 +679,53 @@ class WebRTCManager: NSObject, ObservableObject {
         applyPlayoutDelayHintIfPossible()
     }
 
+    @discardableResult
+    func setAudioEnabled(_ enabled: Bool) -> Bool {
+        let wasEnabled = audioEnabled
+        audioEnabled = enabled
+        applyAudioMuteState()
+        guard wasEnabled != enabled else { return false }
+        return shouldReconnectForAudioPreferenceChange()
+    }
+
+    @discardableResult
+    func setMicEnabled(_ enabled: Bool) -> Bool {
+        let wasEnabled = micEnabled
+        micEnabled = enabled
+        applyAudioMuteState()
+        guard wasEnabled != enabled else { return false }
+        return shouldReconnectForAudioPreferenceChange()
+    }
+
+    func setAudioOutputMuted(_ muted: Bool) {
+        audioOutputMuted = muted
+    }
+
+    func setMicrophoneMuted(_ muted: Bool) {
+        microphoneMuted = muted
+    }
+
+    private func shouldReconnectForAudioPreferenceChange() -> Bool {
+        guard peerConnection != nil || isConnected || isConnecting else { return false }
+        // Janus/uStreamer bakes audio and mic flags into the watch offer. Toggling
+        // them after connect needs a fresh offer so the server opens/closes aplay
+        // and so a local microphone sender exists when mic is enabled.
+        return true
+    }
+
+    private func applyAudioMuteState() {
+        let shouldPlayRemoteAudio = audioEnabled && !audioOutputMuted
+        let shouldSendMicrophone = micEnabled && !microphoneMuted
+
+        remoteAudioTrack?.isEnabled = shouldPlayRemoteAudio
+        localAudioTrack?.isEnabled = shouldSendMicrophone
+
+        audioPeerConnection?.receivers.forEach { receiver in
+            guard receiver.track?.kind == "audio" else { return }
+            receiver.track?.isEnabled = shouldPlayRemoteAudio
+        }
+    }
+
     private func applyPlayoutDelayHintIfPossible() {
         guard let peerConnection else { return }
         guard preferLowLatencyPlayout else { return }
@@ -749,7 +817,8 @@ class WebRTCManager: NSObject, ObservableObject {
             "handle_id": handleId,
         ])
 
-        if (audioEnabled || micEnabled), let audioPeerConnection {
+        let shouldRequestJanusAudio = audioEnabled || micEnabled
+        if shouldRequestJanusAudio, let audioPeerConnection {
             let audioAttachTransaction = makeJanusTransaction()
             try await sendJanusMessage([
                 "janus": "attach",
@@ -773,7 +842,11 @@ class WebRTCManager: NSObject, ObservableObject {
                     "request": "watch",
                     "params": [
                         "orientation": 0,
-                        "audio": audioEnabled,
+                        // GLKVM's browser frontend only allows mic when audio is
+                        // requested. Keep the local remote track muted when
+                        // audioEnabled is false, but still request the Janus audio
+                        // leg so mic RTP can flow to ustreamer/aplay.
+                        "audio": shouldRequestJanusAudio,
                         "video": false,
                         "mic": micEnabled,
                         "camera": false,
@@ -1511,6 +1584,7 @@ class WebRTCManager: NSObject, ObservableObject {
         }
         isFrameRendererAttached = false
         videoTrack = nil
+        remoteAudioTrack = nil
         
         peerConnection?.close()
         peerConnection = nil
@@ -1564,14 +1638,18 @@ class WebRTCManager: NSObject, ObservableObject {
 #if canImport(AVFoundation)
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized:
+            OverlookLog.info("Microphone permission already authorized")
             return true
         case .notDetermined:
-            return await withCheckedContinuation { continuation in
+            let granted = await withCheckedContinuation { continuation in
                 AVCaptureDevice.requestAccess(for: .audio) { granted in
                     continuation.resume(returning: granted)
                 }
             }
+            OverlookLog.info("Microphone permission requested granted=\(granted)")
+            return granted
         default:
+            OverlookLog.error("Microphone permission denied status=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue)")
             return false
         }
 #else
@@ -1585,8 +1663,10 @@ class WebRTCManager: NSObject, ObservableObject {
 
         let audioSource = factory.audioSource(with: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil))
         let audioTrack = factory.audioTrack(with: audioSource, trackId: "audio0")
+        audioTrack.isEnabled = micEnabled && !microphoneMuted
         localAudioTrack = audioTrack
         localAudioSender = peerConnection.add(audioTrack, streamIds: ["stream0"])
+        OverlookLog.info("Local microphone track added enabled=\(self.micEnabled) muted=\(self.microphoneMuted)")
     }
 }
 
@@ -1708,6 +1788,12 @@ extension WebRTCManager: @preconcurrency RTCPeerConnectionDelegate {
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {
         applyPlayoutDelayHintIfPossible()
+        if let track = rtpReceiver.track as? RTCAudioTrack {
+            remoteAudioTrack = track
+            applyAudioMuteState()
+            return
+        }
+
         guard let track = rtpReceiver.track as? RTCVideoTrack else { return }
         videoTrack = track
         if let videoView {
@@ -1892,8 +1978,41 @@ final class WebRTCManager: NSObject, ObservableObject {
     @Published var latency: Int = 0
     @Published var currentFrame: CVPixelBuffer?
     @Published var videoSize: CGSize?
-    @Published var audioEnabled = false
-    @Published var micEnabled = false
+    @Published var audioEnabled: Bool = UserDefaults.standard.bool(forKey: audioEnabledDefaultsKey) {
+        didSet {
+            UserDefaults.standard.set(audioEnabled, forKey: Self.audioEnabledDefaultsKey)
+        }
+    }
+    @Published var micEnabled: Bool = UserDefaults.standard.bool(forKey: micEnabledDefaultsKey) {
+        didSet {
+            UserDefaults.standard.set(micEnabled, forKey: Self.micEnabledDefaultsKey)
+        }
+    }
+    @Published var audioOutputMuted: Bool = false
+    @Published var microphoneMuted: Bool = false
+
+    private static let audioEnabledDefaultsKey = "overlook.audio.enabled"
+    private static let micEnabledDefaultsKey = "overlook.audio.micEnabled"
+
+    @discardableResult
+    func setAudioEnabled(_ enabled: Bool) -> Bool {
+        audioEnabled = enabled
+        return false
+    }
+
+    @discardableResult
+    func setMicEnabled(_ enabled: Bool) -> Bool {
+        micEnabled = enabled
+        return false
+    }
+
+    func setAudioOutputMuted(_ muted: Bool) {
+        audioOutputMuted = muted
+    }
+
+    func setMicrophoneMuted(_ muted: Bool) {
+        microphoneMuted = muted
+    }
     
     func connect(to device: KVMDevice) async throws {
         isConnected = false

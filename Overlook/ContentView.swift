@@ -308,6 +308,20 @@ struct ContentView: View {
                     }
                     .help("Connections")
 
+                    Button(action: { setAudioOutputMuted(!webRTCManager.audioOutputMuted) }) {
+                        Image(systemName: webRTCManager.audioOutputMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .foregroundStyle(webRTCManager.audioOutputMuted ? Color.red : Color.primary)
+                    }
+                    .disabled(!webRTCManager.audioEnabled)
+                    .help(webRTCManager.audioEnabled ? (webRTCManager.audioOutputMuted ? "Unmute Audio Output" : "Mute Audio Output") : "Enable Audio in Settings first")
+
+                    Button(action: { setMicrophoneMuted(!webRTCManager.microphoneMuted) }) {
+                        Image(systemName: webRTCManager.microphoneMuted ? "mic.slash.fill" : "mic.fill")
+                            .foregroundStyle(webRTCManager.microphoneMuted ? Color.red : Color.primary)
+                    }
+                    .disabled(!webRTCManager.micEnabled)
+                    .help(webRTCManager.micEnabled ? (webRTCManager.microphoneMuted ? "Unmute Microphone" : "Mute Microphone") : "Enable Microphone in Settings first")
+
                     Button(action: { showingQuickPaste.toggle() }) {
                         Image(systemName: "bolt.fill")
                     }
@@ -415,6 +429,14 @@ struct ContentView: View {
             try? await Task.sleep(nanoseconds: 300_000_000)
             connectToDevice(device)
         }
+    }
+
+    private func setAudioOutputMuted(_ muted: Bool) {
+        webRTCManager.setAudioOutputMuted(muted)
+    }
+
+    private func setMicrophoneMuted(_ muted: Bool) {
+        webRTCManager.setMicrophoneMuted(muted)
     }
 
     private func manualConnect() {

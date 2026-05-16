@@ -42,6 +42,7 @@ struct WebUISettingsPanel: View {
     @State private var isNetworkExpanded = false
     @State private var isAdvancedExpanded = false
     @State private var isAgentExpanded = false
+    @State private var isAboutExpanded = false
 
     @State private var currentEdid: String = ""
     @State private var selectedEdidOption: String = "CUSTOMIZE"
@@ -88,6 +89,22 @@ struct WebUISettingsPanel: View {
         ("low_latency_first", "Low latency"),
         ("quality_first", "Smart"),
     ]
+    private let transferOptions: [(String, String)] = [
+        ("webrtc", "WebRTC"),
+        ("flex_fec", "WebRTC (FEC)"),
+        ("direct_h264", "Direct H.264"),
+    ]
+    private let fecPacketOptions: [(Int, String)] = [
+        (5, "5%"),
+        (10, "10%"),
+        (15, "15%"),
+        (20, "20%"),
+    ]
+    private let videoLayoutOptions: [(String, String)] = [
+        ("fit_screen", "Adaptive"),
+        ("fix_scale", "Best Picture Quality"),
+        ("fix_pixel", "Original Pixel"),
+    ]
 
     private let videoQualityCustomTag: Int = -1
     private let videoQualityInsaneTag: Int = 4
@@ -115,6 +132,10 @@ struct WebUISettingsPanel: View {
     private let themeOptions: [(String, String)] = [
         ("0", "Light"),
         ("1", "Dark"),
+    ]
+    private let languageOptions: [(String, String)] = [
+        ("en", "English"),
+        ("zh", "Chinese"),
     ]
 
     private struct EDIDOption: Hashable {
@@ -260,6 +281,27 @@ struct WebUISettingsPanel: View {
                                 Task { await applyVideoQualityPreset(newValue) }
                             }
 
+                            Picker("Transfer", selection: bindingString(
+                                get: { $0.videoMode },
+                                set: { $0.videoMode = $1 },
+                                defaultValue: "webrtc"
+                            )) {
+                                ForEach(transferOptions, id: \.0) { value, label in
+                                    Text(label).tag(value)
+                                }
+                            }
+
+                            Picker("FEC Packets", selection: bindingInt(
+                                get: { $0.fecPackets },
+                                set: { $0.fecPackets = $1 },
+                                defaultValue: 20
+                            )) {
+                                ForEach(fecPacketOptions, id: \.0) { value, label in
+                                    Text(label).tag(value)
+                                }
+                            }
+                            .disabled(config?.videoMode != "flex_fec")
+
                             Picker("EDID", selection: $selectedEdidOption) {
                                 ForEach(edidOptions, id: \.id) { opt in
                                     Text(opt.label).tag(opt.id)
@@ -306,6 +348,16 @@ struct WebUISettingsPanel: View {
                                 Text("90°").tag(90)
                                 Text("180°").tag(180)
                                 Text("270°").tag(270)
+                            }
+
+                            Picker("View", selection: bindingString(
+                                get: { $0.videoLayout },
+                                set: { $0.videoLayout = $1 },
+                                defaultValue: "fit_screen"
+                            )) {
+                                ForEach(videoLayoutOptions, id: \.0) { value, label in
+                                    Text(label).tag(value)
+                                }
                             }
 
                             Toggle("Show Cursor", isOn: bindingBool(
@@ -588,6 +640,18 @@ struct WebUISettingsPanel: View {
 
                     DisclosureGroup("Keyboard settings", isExpanded: $isKeyboardExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
+                            Toggle("Bad Link Mode", isOn: bindingBool(
+                                get: { $0.badLinkMode },
+                                set: { $0.badLinkMode = $1 },
+                                defaultValue: false
+                            ))
+
+                            Toggle("Swap Command and Ctrl for MacOS", isOn: bindingBool(
+                                get: { $0.swapCmdCtrl },
+                                set: { $0.swapCmdCtrl = $1 },
+                                defaultValue: false
+                            ))
+
                             Picker("Keymap", selection: bindingString(
                                 get: { $0.keymap },
                                 set: { $0.keymap = $1 },
@@ -620,8 +684,12 @@ struct WebUISettingsPanel: View {
 
                     DisclosureGroup("Audio", isExpanded: $isAudioExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
-                            Toggle("Audio", isOn: $webRTCManager.audioEnabled)
-                            Toggle("Microphone", isOn: $webRTCManager.micEnabled)
+                            Toggle("Speaker stream", isOn: audioEnabledBinding)
+                            Toggle("Microphone stream", isOn: micEnabledBinding)
+                            Toggle("Mute speaker", isOn: audioOutputMutedBinding)
+                                .disabled(!webRTCManager.audioEnabled)
+                            Toggle("Mute microphone", isOn: microphoneMutedBinding)
+                                .disabled(!webRTCManager.micEnabled)
 
                             Picker("Microphone device", selection: $audioInputDeviceUID) {
                                 Text("System Default").tag("")
@@ -645,7 +713,7 @@ struct WebUISettingsPanel: View {
                                 }
                             }
 
-                            Text("Reconnect required")
+                            Text("Stream and device changes require reconnect. Mute is instant.")
                                 .foregroundColor(.secondary)
                                 .font(.caption)
 
@@ -679,7 +747,16 @@ struct WebUISettingsPanel: View {
                                 }
                             }
 
-                            NotImplementedRow(title: "Language")
+                            Picker("Language", selection: bindingString(
+                                get: { $0.language },
+                                set: { $0.language = $1 },
+                                defaultValue: "en"
+                            )) {
+                                ForEach(languageOptions, id: \.0) { value, label in
+                                    Text(label).tag(value)
+                                }
+                            }
+
                             NotImplementedRow(title: "Timezone")
                         }
                         .padding(.top, 6)
@@ -706,6 +783,10 @@ struct WebUISettingsPanel: View {
 
                     DisclosureGroup("Agent API", isExpanded: $isAgentExpanded) {
                         AgentAPISettingsSection()
+                    }
+
+                    DisclosureGroup("About", isExpanded: $isAboutExpanded) {
+                        AppVersionSection()
                     }
                 }
                 .padding()
@@ -1168,6 +1249,49 @@ struct WebUISettingsPanel: View {
         audioOutputDevices = CoreAudioDevices.listOutputDevices()
     }
 
+    private var audioEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { webRTCManager.audioEnabled },
+            set: { enabled in
+                reconnectWebRTCForAudioPreferenceIfNeeded(webRTCManager.setAudioEnabled(enabled))
+            }
+        )
+    }
+
+    private var micEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { webRTCManager.micEnabled },
+            set: { enabled in
+                reconnectWebRTCForAudioPreferenceIfNeeded(webRTCManager.setMicEnabled(enabled))
+            }
+        )
+    }
+
+    private var audioOutputMutedBinding: Binding<Bool> {
+        Binding(
+            get: { webRTCManager.audioOutputMuted },
+            set: { muted in
+                webRTCManager.setAudioOutputMuted(muted)
+            }
+        )
+    }
+
+    private var microphoneMutedBinding: Binding<Bool> {
+        Binding(
+            get: { webRTCManager.microphoneMuted },
+            set: { muted in
+                webRTCManager.setMicrophoneMuted(muted)
+            }
+        )
+    }
+
+    private func reconnectWebRTCForAudioPreferenceIfNeeded(_ needed: Bool) {
+        guard needed else { return }
+        Task { @MainActor in
+            await reconnectWebRTC()
+        }
+    }
+
     @MainActor
     private func reconnectWebRTC() async {
         guard let device = kvmDeviceManager.connectedDevice else { return }
@@ -1288,6 +1412,91 @@ struct WebUISettingsPanel: View {
 
     private func bindingIntValue(get: @escaping (GLKVMSystemConfig) -> Int, defaultValue: Int) -> Int {
         config.map(get) ?? defaultValue
+    }
+}
+
+// MARK: - App Version
+
+private struct AppVersionSection: View {
+    private let appVersion = AppVersion.current
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LabeledContent("Version", value: appVersion.displayVersion)
+
+            LabeledContent("Build", value: appVersion.build)
+
+            if let commit = appVersion.gitCommit {
+                LabeledContent("Git commit", value: commit)
+            }
+
+            HStack(spacing: 10) {
+                Button("About Overlook") {
+                    NSApp.orderFrontStandardAboutPanel(options: appVersion.aboutPanelOptions)
+                }
+
+                Button("Copy Version") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(appVersion.copyString, forType: .string)
+                }
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(.top, 6)
+    }
+}
+
+private struct AppVersion {
+    let marketingVersion: String
+    let build: String
+    let gitCommit: String?
+
+    static var current: AppVersion {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let marketingVersion = info["CFBundleShortVersionString"] as? String
+        let build = info["CFBundleVersion"] as? String
+        let gitCommit = info["OverlookGitCommit"] as? String
+
+        return AppVersion(
+            marketingVersion: sanitized(marketingVersion, fallback: "0.0.0"),
+            build: sanitized(build, fallback: "0"),
+            gitCommit: sanitizedOptional(gitCommit)
+        )
+    }
+
+    var displayVersion: String {
+        "v\(marketingVersion)"
+    }
+
+    var copyString: String {
+        if let gitCommit {
+            return "Overlook \(displayVersion) (\(build)), commit \(gitCommit)"
+        }
+        return "Overlook \(displayVersion) (\(build))"
+    }
+
+    var aboutPanelOptions: [NSApplication.AboutPanelOptionKey: Any] {
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [
+            .applicationVersion: displayVersion,
+            .version: "Build \(build)"
+        ]
+
+        if let gitCommit {
+            options[.credits] = NSAttributedString(string: "Git commit \(gitCommit)")
+        }
+
+        return options
+    }
+
+    private static func sanitized(_ value: String?, fallback: String) -> String {
+        sanitizedOptional(value) ?? fallback
+    }
+
+    private static func sanitizedOptional(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false, trimmed.hasPrefix("$(") == false else { return nil }
+        return trimmed
     }
 }
 

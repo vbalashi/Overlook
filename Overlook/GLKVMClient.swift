@@ -148,6 +148,12 @@ struct GLKVMSystemConfig: Codable, Hashable {
     var isAbsoluteMouse: Bool
     var fingerbotStrength: Int
     var videoProcessing: String
+    var language: String
+    var videoFormat: Int
+    var badLinkMode: Bool
+    var videoLayout: String
+    var fecPackets: Int
+    var swapCmdCtrl: Bool
 
     enum CodingKeys: String, CodingKey {
         case shortcuts
@@ -168,6 +174,12 @@ struct GLKVMSystemConfig: Codable, Hashable {
         case isAbsoluteMouse = "is_absolute_mouse"
         case fingerbotStrength = "fingerbot_strength"
         case videoProcessing = "video_processing"
+        case language
+        case videoFormat = "video_format"
+        case badLinkMode = "bad_link_mode"
+        case videoLayout = "video_layout"
+        case fecPackets = "fec_packets"
+        case swapCmdCtrl = "swap_cmd_ctrl"
     }
 
     init(from decoder: Decoder) throws {
@@ -190,6 +202,12 @@ struct GLKVMSystemConfig: Codable, Hashable {
         isAbsoluteMouse = (try? c.decode(Bool.self, forKey: .isAbsoluteMouse)) ?? true
         fingerbotStrength = (try? c.decode(Int.self, forKey: .fingerbotStrength)) ?? 0
         videoProcessing = (try? c.decode(String.self, forKey: .videoProcessing)) ?? ""
+        language = (try? c.decode(String.self, forKey: .language)) ?? "en"
+        videoFormat = (try? c.decode(Int.self, forKey: .videoFormat)) ?? 0
+        badLinkMode = (try? c.decode(Bool.self, forKey: .badLinkMode)) ?? false
+        videoLayout = (try? c.decode(String.self, forKey: .videoLayout)) ?? "fit_screen"
+        fecPackets = (try? c.decode(Int.self, forKey: .fecPackets)) ?? 20
+        swapCmdCtrl = (try? c.decode(Bool.self, forKey: .swapCmdCtrl)) ?? false
     }
 }
 

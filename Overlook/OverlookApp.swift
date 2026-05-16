@@ -30,6 +30,7 @@ struct OverlookApp: App {
         .commands {
             RemoteCommands(
                 kvmDeviceManager: appDelegate.kvmDeviceManager,
+                webRTCManager: appDelegate.webRTCManager,
                 inputManager: appDelegate.inputManager,
                 showSettings: {
                     appDelegate.showSettings()
@@ -51,6 +52,7 @@ struct OverlookApp: App {
 
 struct RemoteCommands: Commands {
     @ObservedObject var kvmDeviceManager: KVMDeviceManager
+    @ObservedObject var webRTCManager: WebRTCManager
     let inputManager: InputManager
     let showSettings: () -> Void
     let showConnections: () -> Void
@@ -64,6 +66,20 @@ struct RemoteCommands: Commands {
             Button("Show Statistics") {
                 showConnections()
             }
+
+            Divider()
+
+            Button(webRTCManager.audioOutputMuted ? "Unmute Audio Output" : "Mute Audio Output") {
+                setAudioOutputMuted(!webRTCManager.audioOutputMuted)
+            }
+            .keyboardShortcut("a", modifiers: [.command, .shift])
+            .disabled(!webRTCManager.audioEnabled)
+
+            Button(webRTCManager.microphoneMuted ? "Unmute Microphone" : "Mute Microphone") {
+                setMicrophoneMuted(!webRTCManager.microphoneMuted)
+            }
+            .keyboardShortcut("m", modifiers: [.command, .shift])
+            .disabled(!webRTCManager.micEnabled)
 
             Divider()
 
@@ -109,6 +125,14 @@ struct RemoteCommands: Commands {
                 OverlookLog.error("Failed to send menu shortcut \(shortcut.label): \(OverlookLog.describe(error))")
             }
         }
+    }
+
+    private func setAudioOutputMuted(_ muted: Bool) {
+        webRTCManager.setAudioOutputMuted(muted)
+    }
+
+    private func setMicrophoneMuted(_ muted: Bool) {
+        webRTCManager.setMicrophoneMuted(muted)
     }
 }
 
