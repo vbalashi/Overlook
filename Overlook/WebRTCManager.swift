@@ -88,6 +88,9 @@ class WebRTCManager: NSObject, ObservableObject {
     @Published var inboundAudioJitterMs: Int?
     @Published var inboundAudioPacketsLost: Int?
     @Published var audioIceCurrentRoundTripTimeMs: Int?
+    @Published var sessionVideoBytesReceived: Int64?
+    @Published var sessionAudioBytesReceived: Int64?
+    @Published var sessionAudioBytesSent: Int64?
     @Published var audioEnabled: Bool = UserDefaults.standard.bool(forKey: audioEnabledDefaultsKey) {
         didSet {
             UserDefaults.standard.set(audioEnabled, forKey: Self.audioEnabledDefaultsKey)
@@ -1201,6 +1204,9 @@ class WebRTCManager: NSObject, ObservableObject {
                 inboundAudioJitterMs = nil
                 inboundAudioPacketsLost = nil
                 audioIceCurrentRoundTripTimeMs = nil
+                sessionVideoBytesReceived = nil
+                sessionAudioBytesReceived = nil
+                sessionAudioBytesSent = nil
             }
             return
         }
@@ -1372,6 +1378,7 @@ class WebRTCManager: NSObject, ObservableObject {
             self.inboundVideoDecodeMs = decodeMs
             self.inboundVideoPacketsLost = packetsLost
             self.iceCurrentRoundTripTimeMs = rttMs
+            self.sessionVideoBytesReceived = bytesReceived
         }
 
         guard let audioPeerConnection else {
@@ -1385,6 +1392,8 @@ class WebRTCManager: NSObject, ObservableObject {
                 self.inboundAudioJitterMs = nil
                 self.inboundAudioPacketsLost = nil
                 self.audioIceCurrentRoundTripTimeMs = nil
+                self.sessionAudioBytesReceived = nil
+                self.sessionAudioBytesSent = nil
             }
             return
         }
@@ -1403,6 +1412,7 @@ class WebRTCManager: NSObject, ObservableObject {
         var audioJitterBufferEmittedCount: Double?
         var audioPacketsLost: Int?
         var audioCurrentRoundTripTimeSeconds: Double?
+        var audioBytesSent: Int64?
 
         for statistic in audioReport.statistics.values {
             if statistic.type == "candidate-pair" {
@@ -1417,28 +1427,36 @@ class WebRTCManager: NSObject, ObservableObject {
                 continue
             }
 
-            guard statistic.type == "inbound-rtp" else { continue }
+            if statistic.type == "inbound-rtp" {
+                if let kind = statistic.values["kind"] as? String, kind != "audio" { continue }
+                if let mediaType = statistic.values["mediaType"] as? String, mediaType != "audio" { continue }
 
-            if let kind = statistic.values["kind"] as? String, kind != "audio" { continue }
-            if let mediaType = statistic.values["mediaType"] as? String, mediaType != "audio" { continue }
+                if let n = audioNumberValue(statistic.values["bytesReceived"]) {
+                    audioBytesReceived = n.int64Value
+                }
+                if let n = audioNumberValue(statistic.values["jitter"]) {
+                    audioJitterSeconds = n.doubleValue
+                }
+                if let n = audioNumberValue(statistic.values["jitterBufferDelay"]) {
+                    audioJitterBufferDelaySeconds = n.doubleValue
+                }
+                if let n = audioNumberValue(statistic.values["jitterBufferEmittedCount"]) {
+                    audioJitterBufferEmittedCount = n.doubleValue
+                }
+                if let n = audioNumberValue(statistic.values["packetsLost"]) {
+                    audioPacketsLost = n.intValue
+                }
+                continue
+            }
 
-            if let n = audioNumberValue(statistic.values["bytesReceived"]) {
-                audioBytesReceived = n.int64Value
-            }
-            if let n = audioNumberValue(statistic.values["jitter"]) {
-                audioJitterSeconds = n.doubleValue
-            }
-            if let n = audioNumberValue(statistic.values["jitterBufferDelay"]) {
-                audioJitterBufferDelaySeconds = n.doubleValue
-            }
-            if let n = audioNumberValue(statistic.values["jitterBufferEmittedCount"]) {
-                audioJitterBufferEmittedCount = n.doubleValue
-            }
-            if let n = audioNumberValue(statistic.values["packetsLost"]) {
-                audioPacketsLost = n.intValue
-            }
+            if statistic.type == "outbound-rtp" {
+                if let kind = statistic.values["kind"] as? String, kind != "audio" { continue }
+                if let mediaType = statistic.values["mediaType"] as? String, mediaType != "audio" { continue }
 
-            break
+                if let n = audioNumberValue(statistic.values["bytesSent"]) {
+                    audioBytesSent = n.int64Value
+                }
+            }
         }
 
         let audioNow = Date().timeIntervalSince1970
@@ -1454,6 +1472,8 @@ class WebRTCManager: NSObject, ObservableObject {
                 self.inboundAudioJitterMs = nil
                 self.inboundAudioPacketsLost = nil
                 self.audioIceCurrentRoundTripTimeMs = nil
+                self.sessionAudioBytesReceived = nil
+                self.sessionAudioBytesSent = audioBytesSent
             }
             return
         }
@@ -1510,6 +1530,8 @@ class WebRTCManager: NSObject, ObservableObject {
             self.inboundAudioJitterMs = audioJitterMs
             self.inboundAudioPacketsLost = audioPacketsLost
             self.audioIceCurrentRoundTripTimeMs = audioRttMs
+            self.sessionAudioBytesReceived = audioBytesReceived
+            self.sessionAudioBytesSent = audioBytesSent
         }
     }
     
@@ -1624,6 +1646,9 @@ class WebRTCManager: NSObject, ObservableObject {
         inboundAudioJitterMs = nil
         inboundAudioPacketsLost = nil
         audioIceCurrentRoundTripTimeMs = nil
+        sessionVideoBytesReceived = nil
+        sessionAudioBytesReceived = nil
+        sessionAudioBytesSent = nil
         lastInboundVideoBytesReceived = nil
         lastInboundVideoBytesTimestamp = nil
         lastInboundVideoFramesDecoded = nil
@@ -1978,6 +2003,21 @@ final class WebRTCManager: NSObject, ObservableObject {
     @Published var latency: Int = 0
     @Published var currentFrame: CVPixelBuffer?
     @Published var videoSize: CGSize?
+    @Published var inboundVideoKbps: Int?
+    @Published var inboundFps: Double?
+    @Published var inboundVideoPlayoutDelayMs: Int?
+    @Published var inboundVideoJitterMs: Int?
+    @Published var inboundVideoDecodeMs: Int?
+    @Published var inboundVideoPacketsLost: Int?
+    @Published var iceCurrentRoundTripTimeMs: Int?
+    @Published var inboundAudioKbps: Int?
+    @Published var inboundAudioPlayoutDelayMs: Int?
+    @Published var inboundAudioJitterMs: Int?
+    @Published var inboundAudioPacketsLost: Int?
+    @Published var audioIceCurrentRoundTripTimeMs: Int?
+    @Published var sessionVideoBytesReceived: Int64?
+    @Published var sessionAudioBytesReceived: Int64?
+    @Published var sessionAudioBytesSent: Int64?
     @Published var audioEnabled: Bool = UserDefaults.standard.bool(forKey: audioEnabledDefaultsKey) {
         didSet {
             UserDefaults.standard.set(audioEnabled, forKey: Self.audioEnabledDefaultsKey)
@@ -2034,6 +2074,21 @@ final class WebRTCManager: NSObject, ObservableObject {
         lastVideoFrameAgeSeconds = nil
         latency = 0
         currentFrame = nil
+        inboundVideoKbps = nil
+        inboundFps = nil
+        inboundVideoPlayoutDelayMs = nil
+        inboundVideoJitterMs = nil
+        inboundVideoDecodeMs = nil
+        inboundVideoPacketsLost = nil
+        iceCurrentRoundTripTimeMs = nil
+        inboundAudioKbps = nil
+        inboundAudioPlayoutDelayMs = nil
+        inboundAudioJitterMs = nil
+        inboundAudioPacketsLost = nil
+        audioIceCurrentRoundTripTimeMs = nil
+        sessionVideoBytesReceived = nil
+        sessionAudioBytesReceived = nil
+        sessionAudioBytesSent = nil
     }
 
     func setFrameCaptureEnabled(_ enabled: Bool) {

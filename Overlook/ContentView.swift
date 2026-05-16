@@ -167,6 +167,9 @@ struct ContentView: View {
                     inboundAudioJitterMs: webRTCManager.inboundAudioJitterMs,
                     inboundAudioPacketsLost: webRTCManager.inboundAudioPacketsLost,
                     audioIceCurrentRoundTripTimeMs: webRTCManager.audioIceCurrentRoundTripTimeMs,
+                    sessionVideoBytesReceived: webRTCManager.sessionVideoBytesReceived,
+                    sessionAudioBytesReceived: webRTCManager.sessionAudioBytesReceived,
+                    sessionAudioBytesSent: webRTCManager.sessionAudioBytesSent,
                     isConnectionBusy: isConnectionBusy,
                     connectionErrorMessage: connectionErrorMessage,
                     onScan: {
@@ -867,6 +870,9 @@ struct ConnectionsPopoverView: View {
     let inboundAudioJitterMs: Int?
     let inboundAudioPacketsLost: Int?
     let audioIceCurrentRoundTripTimeMs: Int?
+    let sessionVideoBytesReceived: Int64?
+    let sessionAudioBytesReceived: Int64?
+    let sessionAudioBytesSent: Int64?
     let isConnectionBusy: Bool
     let connectionErrorMessage: String?
 
@@ -894,6 +900,13 @@ struct ConnectionsPopoverView: View {
         let audioJitterText = inboundAudioJitterMs.map { "\($0) ms" } ?? "—"
         let audioLossText = inboundAudioPacketsLost.map { String($0) } ?? "—"
         let audioRttText = audioIceCurrentRoundTripTimeMs.map { "\($0) ms" } ?? "—"
+        let downstreamBytes = [sessionVideoBytesReceived, sessionAudioBytesReceived].compactMap { $0 }.reduce(Int64(0), +)
+        let upstreamBytes = sessionAudioBytesSent ?? 0
+        let hasTrafficStats = sessionVideoBytesReceived != nil || sessionAudioBytesReceived != nil || sessionAudioBytesSent != nil
+        let totalTrafficText = hasTrafficStats ? Self.formatBytes(downstreamBytes + upstreamBytes) : "—"
+        let trafficDetailText = hasTrafficStats
+            ? "Down \(Self.formatBytes(downstreamBytes)) · Up \(Self.formatBytes(upstreamBytes))"
+            : "Down — · Up —"
         let displayedDevice = selectedDevice ?? (devices.count == 1 ? devices[0] : nil)
 
         VStack(alignment: .leading, spacing: 12) {
@@ -1025,6 +1038,24 @@ struct ConnectionsPopoverView: View {
                         .foregroundColor(.secondary)
                 }
 
+                HStack {
+                    Text("Traffic")
+                        .font(.caption)
+                    Spacer()
+                    Text(totalTrafficText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
+                HStack {
+                    Text("Traffic Detail")
+                        .font(.caption)
+                    Spacer()
+                    Text(trafficDetailText)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+
                 if inboundAudioKbps != nil || inboundAudioJitterMs != nil || inboundAudioPacketsLost != nil || audioIceCurrentRoundTripTimeMs != nil {
                     HStack {
                         Text("Audio")
@@ -1074,6 +1105,24 @@ struct ConnectionsPopoverView: View {
             }
         }
         .padding(14)
+    }
+
+    private static func formatBytes(_ bytes: Int64) -> String {
+        let units = ["B", "KB", "MB", "GB", "TB"]
+        var value = Double(max(0, bytes))
+        var unitIndex = 0
+        while value >= 1024, unitIndex < units.count - 1 {
+            value /= 1024
+            unitIndex += 1
+        }
+
+        if unitIndex == 0 {
+            return "\(Int(value)) \(units[unitIndex])"
+        }
+        if value < 10 {
+            return String(format: "%.1f %@", value, units[unitIndex])
+        }
+        return String(format: "%.0f %@", value, units[unitIndex])
     }
 }
 
