@@ -19,8 +19,14 @@ struct WebUISettingsPanel: View {
     @State private var config: GLKVMSystemConfig?
     @State private var keymaps: GLKVMHidKeymapsState?
     @State private var streamerState: GLKVMStreamerState?
+    @State private var systemTime: GLKVMSystemTimeInfo?
+    @State private var networkConfig: GLKVMNetworkConfig?
+    @State private var currentAp: GLKVMRepeaterStatus?
+    @State private var hostname: String = ""
     @State private var isLoading = false
     @State private var isApplying = false
+    @State private var isApplyingSystemTime = false
+    @State private var isLoadingNetwork = false
     @State private var isApplyingStreamer = false
     @State private var isApplyingEdid = false
     @State private var errorMessage: String?
@@ -137,6 +143,12 @@ struct WebUISettingsPanel: View {
         ("en", "English"),
         ("zh", "Chinese"),
     ]
+    private let timezoneOptions: [(Int, String)] = {
+        (-12...14).map { hour in
+            let sign = hour >= 0 ? "+" : "-"
+            return (-hour * 60, "UTC\(sign)\(String(format: "%02d", abs(hour))):00")
+        }
+    }()
 
     private struct EDIDOption: Hashable {
         let id: String
@@ -757,16 +769,31 @@ struct WebUISettingsPanel: View {
                                 }
                             }
 
-                            NotImplementedRow(title: "Timezone")
+                            Picker("Timezone", selection: timezoneBinding) {
+                                ForEach(timezoneOptions, id: \.0) { value, label in
+                                    Text(label).tag(value)
+                                }
+                            }
+                            .disabled(systemTime == nil || isApplyingSystemTime)
                         }
                         .padding(.top, 6)
                     }
 
                     DisclosureGroup("Network", isExpanded: $isNetworkExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
-                            NotImplementedRow(title: "Modify")
-                            NotImplementedRow(title: "Wi-Fi")
-                            NotImplementedRow(title: "Ethernet")
+                            if isLoadingNetwork {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+
+                            LabeledContent("Hostname", value: hostname.isEmpty ? "Unknown" : hostname)
+                            LabeledContent("Ethernet", value: ethernetSummary)
+                            LabeledContent("Wi-Fi", value: wifiSummary)
+
+                            Button("Refresh Network") {
+                                Task { await loadNetworkDetails() }
+                            }
+                            .disabled(kvmDeviceManager.glkvmClient == nil || isLoadingNetwork)
                         }
                         .padding(.top, 6)
                     }
@@ -973,6 +1000,10 @@ struct WebUISettingsPanel: View {
                 config = nil
                 keymaps = nil
                 streamerState = nil
+                systemTime = nil
+                networkConfig = nil
+                currentAp = nil
+                hostname = ""
                 currentEdid = ""
                 selectedEdidOption = "CUSTOMIZE"
                 customEdidDraft = ""
@@ -986,15 +1017,27 @@ struct WebUISettingsPanel: View {
         do {
             async let keymaps = client.getHidKeymaps()
             async let streamer = client.getStreamerState()
+            async let systemTime = try? client.getSystemTime()
+            async let networkConfig = try? client.getNetworkConfig()
+            async let currentAp = try? client.getCurrentAp()
+            async let hostname = try? client.getHostname()
             let config = try await client.getSystemConfig()
             let km = try await keymaps
             let st = try await streamer
+            let time = await systemTime
+            let network = await networkConfig
+            let ap = await currentAp
+            let host = await hostname
             let edidValue = try await client.getEDID()
             await MainActor.run {
                 self.config = config
                 webRTCManager.setPreferLowLatencyPlayout(config.videoProcessing == "low_latency_first")
                 self.keymaps = km
                 self.streamerState = st
+                self.systemTime = time
+                self.networkConfig = network
+                self.currentAp = ap
+                self.hostname = host ?? ""
                 self.currentEdid = edidValue
                 syncEdidSelectionFromCurrent()
                 if let params = st.params,
@@ -1241,6 +1284,62 @@ struct WebUISettingsPanel: View {
         if value < min { return min }
         if value > max { return max }
         return value
+    }
+
+    private var timezoneBinding: Binding<Int> {
+        Binding(
+            get: { systemTime?.timeZone ?? 0 },
+            set: { newValue in
+                guard systemTime?.timeZone != newValue else { return }
+                Task { await applyTimezone(newValue) }
+            }
+        )
+    }
+
+    private var ethernetSummary: String {
+        guard let networkConfig else { return "Unknown" }
+        let ip = networkConfig.ipAddress?.nilIfEmpty ?? "No IP address"
+        if let protocolMode = networkConfig.protocolMode?.nilIfEmpty {
+            return "\(ip) (\(protocolMode.uppercased()))"
+        }
+        return ip
+    }
+
+    private var wifiSummary: String {
+        guard let currentAp else { return "Unknown" }
+        guard currentAp.connected == true else { return "No Wi-Fi connected" }
+        let ssid = currentAp.ssid?.nilIfEmpty ?? "Connected"
+        if let ip = currentAp.ipAddress?.nilIfEmpty {
+            return "\(ssid) (\(ip))"
+        }
+        return ssid
+    }
+
+    @MainActor
+    private func applyTimezone(_ timeZone: Int) async {
+        guard let client = kvmDeviceManager.glkvmClient else { return }
+        isApplyingSystemTime = true
+        do {
+            try await client.setSystemTime(timeZone: timeZone)
+            systemTime = try await client.getSystemTime()
+            isApplyingSystemTime = false
+        } catch {
+            isApplyingSystemTime = false
+            recordError("Failed to apply timezone: \(error)")
+        }
+    }
+
+    @MainActor
+    private func loadNetworkDetails() async {
+        guard let client = kvmDeviceManager.glkvmClient else { return }
+        isLoadingNetwork = true
+        async let network = try? client.getNetworkConfig()
+        async let ap = try? client.getCurrentAp()
+        async let host = try? client.getHostname()
+        networkConfig = await network
+        currentAp = await ap
+        hostname = await host ?? ""
+        isLoadingNetwork = false
     }
 
     @MainActor
@@ -1634,5 +1733,12 @@ private struct NotImplementedRow: View {
         }
         .opacity(0.7)
         .allowsHitTesting(false)
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

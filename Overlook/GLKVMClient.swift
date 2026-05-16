@@ -282,6 +282,61 @@ struct GLKVMStreamerState: Decodable, Hashable {
     let params: Params?
 }
 
+struct GLKVMSystemTimeInfo: Decodable, Hashable {
+    let timeZone: Int
+
+    enum CodingKeys: String, CodingKey {
+        case timeZone = "time_zone"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        timeZone = (try? c.decode(Int.self, forKey: .timeZone)) ?? 0
+    }
+}
+
+struct GLKVMNetworkConfigResult: Decodable {
+    let config: GLKVMNetworkConfig
+}
+
+struct GLKVMNetworkConfig: Decodable, Hashable {
+    let protocolMode: String?
+    let ipAddress: String?
+    let netmask: String?
+    let gateway: String?
+    let dnsServer1: String?
+    let dnsServer2: String?
+
+    enum CodingKeys: String, CodingKey {
+        case protocolMode = "protocol"
+        case ipAddress = "ip_address"
+        case netmask
+        case gateway
+        case dnsServer1 = "dns_server1"
+        case dnsServer2 = "dns_server2"
+    }
+}
+
+struct GLKVMRepeaterStatus: Decodable, Hashable {
+    let connected: Bool?
+    let enable: Bool?
+    let ssid: String?
+    let ipAddress: String?
+    let signal: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case connected
+        case enable
+        case ssid
+        case ipAddress = "ip_address"
+        case signal
+    }
+}
+
+struct GLKVMHostnameResult: Decodable {
+    let hostname: String?
+}
+
 struct GLKVMMSDPartitionDevice: Decodable, Hashable {
     let path: String
     let size: Int
@@ -641,6 +696,44 @@ final class GLKVMClient {
         )
     }
 
+    func getSystemTime() async throws -> GLKVMSystemTimeInfo {
+        let response = try await request(
+            method: "GET",
+            path: "api/system/time",
+            responseType: GLKVMResponse<GLKVMSystemTimeInfo>.self
+        )
+        return response.result
+    }
+
+    func setSystemTime(timeZone: Int) async throws {
+        _ = try await request(
+            method: "POST",
+            path: "api/system/time",
+            query: [URLQueryItem(name: "time_zone", value: String(timeZone))],
+            body: Data(),
+            contentType: "application/x-www-form-urlencoded",
+            responseType: GLKVMResponse<GLKVMEmptyResult>.self
+        )
+    }
+
+    func getNetworkConfig() async throws -> GLKVMNetworkConfig {
+        let response = try await request(
+            method: "GET",
+            path: "api/system/get_network_config",
+            responseType: GLKVMResponse<GLKVMNetworkConfigResult>.self
+        )
+        return response.result.config
+    }
+
+    func getCurrentAp() async throws -> GLKVMRepeaterStatus {
+        let response = try await request(
+            method: "GET",
+            path: "api/repeater/get_status",
+            responseType: GLKVMResponse<GLKVMRepeaterStatus>.self
+        )
+        return response.result
+    }
+
     func getTurnCredentials() async throws -> GLKVMTurnCredentials {
         let response = try await request(
             method: "GET",
@@ -749,6 +842,32 @@ extension GLKVMClient {
         }
 
         return data
+    }
+}
+
+extension GLKVMClient {
+    func getHostname() async throws -> String {
+        let data = try await requestData(
+            method: "GET",
+            path: "api/system/get_hostname"
+        )
+
+        let decoder = JSONDecoder()
+        if let wrapped = try? decoder.decode(GLKVMResponse<String>.self, from: data) {
+            return wrapped.result
+        }
+        if let wrapped = try? decoder.decode(GLKVMResponse<GLKVMHostnameResult>.self, from: data),
+           let hostname = wrapped.result.hostname {
+            return hostname
+        }
+        if let wrapped = try? decoder.decode(GLKVMResponse<GLKVMJSONObject>.self, from: data),
+           case .string(let hostname) = wrapped.result["hostname"] {
+            return hostname
+        }
+        if let s = String(data: data, encoding: .utf8) {
+            return s.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        throw ClientError.decodingFailed
     }
 }
 
