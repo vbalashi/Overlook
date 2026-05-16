@@ -243,16 +243,14 @@ final class WebRTCAudioDevice: NSObject, RTCAudioDevice {
     }
 
     private func defaultDeviceID(selector: AudioObjectPropertySelector) -> AudioDeviceID {
-        var address = AudioObjectPropertyAddress(
-            mSelector: selector,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var deviceID = AudioDeviceID(0)
-        var dataSize = UInt32(MemoryLayout<AudioDeviceID>.size)
-        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &dataSize, &deviceID)
-        if status != noErr { return AudioDeviceID(0) }
-        return deviceID
+        switch selector {
+        case kAudioHardwarePropertyDefaultInputDevice:
+            return CoreAudioDevices.defaultInputDeviceID()
+        case kAudioHardwarePropertyDefaultOutputDevice:
+            return CoreAudioDevices.defaultOutputDeviceID()
+        default:
+            return AudioDeviceID(0)
+        }
     }
 
     private func makeLinearPCMFormat(sampleRate: Double, channels: Int) -> AudioStreamBasicDescription {

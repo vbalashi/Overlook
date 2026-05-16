@@ -134,7 +134,10 @@ class WebRTCManager: NSObject, ObservableObject {
 
     private let audioDevicesListenerQueue = DispatchQueue(label: "com.overlook.audio-device-change")
     private var audioDevicesListenerBlock: AudioObjectPropertyListenerBlock?
+    private var audioDevicesListenerAddresses: [AudioObjectPropertyAddress] = []
     private var audioDeviceChangeDebounceTask: Task<Void, Never>?
+    private var connectedDefaultInputDeviceID: AudioDeviceID?
+    private var connectedDefaultOutputDeviceID: AudioDeviceID?
     private var isAutoReconnectInProgress: Bool = false
     private var lastAutoReconnectAt: Date?
     private var autoReconnectTask: Task<Void, Never>?
@@ -213,21 +216,18 @@ class WebRTCManager: NSObject, ObservableObject {
         wakeReconnectTask = nil
 
         if let block = audioDevicesListenerBlock {
-            var address = AudioObjectPropertyAddress(
-                mSelector: kAudioHardwarePropertyDevices,
-                mScope: kAudioObjectPropertyScopeGlobal,
-                mElement: kAudioObjectPropertyElementMain
-            )
-
-            _ = AudioObjectRemovePropertyListenerBlock(
-                AudioObjectID(kAudioObjectSystemObject),
-                &address,
-                audioDevicesListenerQueue,
-                block
-            )
+            for var address in audioDevicesListenerAddresses {
+                _ = AudioObjectRemovePropertyListenerBlock(
+                    AudioObjectID(kAudioObjectSystemObject),
+                    &address,
+                    audioDevicesListenerQueue,
+                    block
+                )
+            }
         }
 
         audioDevicesListenerBlock = nil
+        audioDevicesListenerAddresses = []
         audioDeviceChangeDebounceTask?.cancel()
         audioDeviceChangeDebounceTask = nil
     }
@@ -357,11 +357,23 @@ class WebRTCManager: NSObject, ObservableObject {
     private func startAudioDeviceChangeMonitoring() {
         guard audioDevicesListenerBlock == nil else { return }
 
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
+        let addresses = [
+            AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDevices,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            ),
+            AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            ),
+            AudioObjectPropertyAddress(
+                mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+        ]
 
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             guard let self else { return }
@@ -371,36 +383,44 @@ class WebRTCManager: NSObject, ObservableObject {
         }
 
         audioDevicesListenerBlock = block
-        _ = AudioObjectAddPropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            audioDevicesListenerQueue,
-            block
-        )
+        audioDevicesListenerAddresses = addresses
+        for var address in addresses {
+            _ = AudioObjectAddPropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                audioDevicesListenerQueue,
+                block
+            )
+        }
     }
 
     private func stopAudioDeviceChangeMonitoring() {
         guard let block = audioDevicesListenerBlock else { return }
 
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-
-        _ = AudioObjectRemovePropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject),
-            &address,
-            audioDevicesListenerQueue,
-            block
-        )
+        for var address in audioDevicesListenerAddresses {
+            _ = AudioObjectRemovePropertyListenerBlock(
+                AudioObjectID(kAudioObjectSystemObject),
+                &address,
+                audioDevicesListenerQueue,
+                block
+            )
+        }
 
         audioDevicesListenerBlock = nil
+        audioDevicesListenerAddresses = []
         audioDeviceChangeDebounceTask?.cancel()
         audioDeviceChangeDebounceTask = nil
     }
 
-    private func shouldAutoReconnectForMissingSelectedDevices() -> Bool {
+    private func recordConnectedDefaultAudioDevices() {
+        let inputUID = (UserDefaults.standard.string(forKey: audioInputDeviceUIDDefaultsKey) ?? "")
+        let outputUID = (UserDefaults.standard.string(forKey: audioOutputDeviceUIDDefaultsKey) ?? "")
+
+        connectedDefaultInputDeviceID = inputUID.isEmpty ? CoreAudioDevices.defaultInputDeviceID() : nil
+        connectedDefaultOutputDeviceID = outputUID.isEmpty ? CoreAudioDevices.defaultOutputDeviceID() : nil
+    }
+
+    private func shouldAutoReconnectForAudioDeviceChange() -> Bool {
         guard peerConnection != nil else { return false }
 
         let inputUID = (UserDefaults.standard.string(forKey: audioInputDeviceUIDDefaultsKey) ?? "")
@@ -414,11 +434,23 @@ class WebRTCManager: NSObject, ObservableObject {
 
         if selectedInputMissing && inputRelevant { return true }
         if selectedOutputMissing && outputRelevant { return true }
+        if inputUID.isEmpty,
+           inputRelevant,
+           let connectedDefaultInputDeviceID,
+           CoreAudioDevices.defaultInputDeviceID() != connectedDefaultInputDeviceID {
+            return true
+        }
+        if outputUID.isEmpty,
+           outputRelevant,
+           let connectedDefaultOutputDeviceID,
+           CoreAudioDevices.defaultOutputDeviceID() != connectedDefaultOutputDeviceID {
+            return true
+        }
         return false
     }
 
     private func handleAudioDevicesChanged() {
-        guard shouldAutoReconnectForMissingSelectedDevices() else { return }
+        guard shouldAutoReconnectForAudioDeviceChange() else { return }
         guard peerConnection != nil else { return }
         guard lastConnectedDevice != nil else { return }
 
@@ -434,7 +466,7 @@ class WebRTCManager: NSObject, ObservableObject {
     private func autoReconnectIfStillNeeded() {
         guard isAutoReconnectInProgress == false else { return }
         guard let device = lastConnectedDevice else { return }
-        guard shouldAutoReconnectForMissingSelectedDevices() else { return }
+        guard shouldAutoReconnectForAudioDeviceChange() else { return }
 
         let now = Date()
         if let last = lastAutoReconnectAt, now.timeIntervalSince(last) < 3.0 {
@@ -453,6 +485,7 @@ class WebRTCManager: NSObject, ObservableObject {
     func connect(to device: KVMDevice) async throws {
         lastConnectedDevice = device
         setupWebRTC()
+        recordConnectedDefaultAudioDevices()
 
         guard let factory = factory else {
             throw WebRTCError.factoryNotInitialized

@@ -97,4 +97,32 @@ enum CoreAudioDevices {
     static func deviceID(forUID uid: String) -> AudioDeviceID? {
         listDevices().first(where: { $0.uid == uid })?.id
     }
+
+    static func defaultInputDeviceID() -> AudioDeviceID {
+        defaultDeviceID(selector: kAudioHardwarePropertyDefaultInputDevice)
+    }
+
+    static func defaultOutputDeviceID() -> AudioDeviceID {
+        defaultDeviceID(selector: kAudioHardwarePropertyDefaultOutputDevice)
+    }
+
+    private static func defaultDeviceID(selector: AudioObjectPropertySelector) -> AudioDeviceID {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID = AudioDeviceID(0)
+        var dataSize = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &address,
+            0,
+            nil,
+            &dataSize,
+            &deviceID
+        )
+        if status != noErr { return AudioDeviceID(0) }
+        return deviceID
+    }
 }
