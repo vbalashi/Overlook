@@ -18,6 +18,12 @@ file log is much cleaner than unified logging for WebRTC and device diagnostics.
 
 - Build local debug artifacts only through `./build.sh -c debug`.
 - Launch local debug builds from `build/debug/Overlook Debug.app`.
+- After compiling and registering the app with Spotlight/LaunchServices, there
+  must be exactly one local Overlook build product visible to macOS: the newest
+  canonical app bundle for the build being tested. Do not leave both
+  `Overlook.app` and `Overlook Debug.app` registered locally; if both appear,
+  remove or unregister the older/non-canonical one before trusting any launch or
+  harness result.
 - Do not use raw `xcodebuild` for day-to-day harness checks. The wrapper sets
   the debug product name and bundle id, stamps the git commit into the app, and
   unregisters/removes duplicate build products that would otherwise appear in
