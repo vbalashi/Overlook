@@ -20,6 +20,7 @@ class InputManager: ObservableObject {
     private var isCapturing = false
 
     private struct PendingAbsoluteMouseMove {
+        let position: CGPoint
         let toX: Int
         let toY: Int
     }
@@ -126,9 +127,13 @@ class InputManager: ObservableObject {
         logCursorDiagnosticsIfDue(pointInView: pointInView, viewSize: viewSize, videoSize: videoSize, sourceContentRectInVideo: sourceContentRectInVideo, normalized: normalized, layerInfo: videoViewLayerInfo)
         let moveEvent = MouseMoveEvent(position: normalized, timestamp: CACurrentMediaTime())
         if transportMode == .glkvmWebSocket {
-            enqueueMouseMoveEvent(moveEvent)
+            if glkvmWebSocketClient != nil {
+                enqueueMouseMoveEvent(moveEvent)
+            } else {
+                sendFallbackMouseMoveEvent(moveEvent)
+            }
         } else {
-            sendMouseMoveEvent(moveEvent)
+            sendWebRTCMouseMoveEvent(moveEvent)
         }
     }
 
@@ -149,7 +154,7 @@ class InputManager: ObservableObject {
     private func enqueueMouseMoveEvent(_ event: MouseMoveEvent) {
         guard isNormalized(event.position) else { return }
         let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
-        pendingMouseMove = PendingAbsoluteMouseMove(toX: toX, toY: toY)
+        pendingMouseMove = PendingAbsoluteMouseMove(position: event.position, toX: toX, toY: toY)
         if mouseMoveSenderTask == nil {
             startMouseMoveSender()
         }
@@ -186,10 +191,20 @@ class InputManager: ObservableObject {
                         return true
                     }
                     guard shouldSend else { continue }
-                    try? await ws.sendHidMouseMove(toX: move.toX, toY: move.toY)
+                    do {
+                        try await ws.sendHidMouseMove(toX: move.toX, toY: move.toY)
+                        await MainActor.run {
+                            self.lastMouseX = move.toX
+                            self.lastMouseY = move.toY
+                        }
+                    } catch {
+                        await MainActor.run {
+                            self.sendFallbackMouseMoveEvent(MouseMoveEvent(position: move.position, timestamp: CACurrentMediaTime()))
+                        }
+                    }
+                } else {
                     await MainActor.run {
-                        self.lastMouseX = move.toX
-                        self.lastMouseY = move.toY
+                        self.sendFallbackMouseMoveEvent(MouseMoveEvent(position: move.position, timestamp: CACurrentMediaTime()))
                     }
                 }
 
@@ -781,18 +796,24 @@ class InputManager: ObservableObject {
            let button = glkvmMouseButtonName(event.button),
            isNormalized(event.position),
            let ws = glkvmWebSocketClient {
-            let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
-            Task {
-                try? await ws.sendHidMouseMove(toX: toX, toY: toY)
-                try? await ws.sendHidMouseButton(button: button, state: event.isDown)
-                await MainActor.run {
+            Task { @MainActor in
+                let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
+                do {
+                    try await ws.sendHidMouseMove(toX: toX, toY: toY)
+                    try await ws.sendHidMouseButton(button: button, state: event.isDown)
                     self.lastMouseX = toX
                     self.lastMouseY = toY
+                } catch {
+                    self.sendFallbackMouseButtonEvent(event)
                 }
             }
             return
         }
 
+        sendFallbackMouseButtonEvent(event)
+    }
+
+    private func sendWebRTCMouseButtonEvent(_ event: MouseButtonEvent) {
         let inputEvent = InputEvent(
             type: "mouse-button",
             data: [
@@ -810,16 +831,22 @@ class InputManager: ObservableObject {
     private func sendMouseMoveEvent(_ event: MouseMoveEvent) {
         if transportMode == .glkvmWebSocket, isNormalized(event.position), let ws = glkvmWebSocketClient {
             let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
-            Task {
-                try? await ws.sendHidMouseMove(toX: toX, toY: toY)
-                await MainActor.run {
+            Task { @MainActor in
+                do {
+                    try await ws.sendHidMouseMove(toX: toX, toY: toY)
                     self.lastMouseX = toX
                     self.lastMouseY = toY
+                } catch {
+                    self.sendFallbackMouseMoveEvent(event)
                 }
             }
             return
         }
 
+        sendFallbackMouseMoveEvent(event)
+    }
+
+    private func sendWebRTCMouseMoveEvent(_ event: MouseMoveEvent) {
         let inputEvent = InputEvent(
             type: "mouse-move",
             data: [
@@ -833,25 +860,104 @@ class InputManager: ObservableObject {
     }
     
     private func sendMouseScrollEvent(_ event: MouseScrollEvent) {
-        if transportMode == .glkvmWebSocket, let ws = glkvmWebSocketClient {
-            let multiplier: CGFloat = reverseScrollDirection ? -1 : 1
-            scrollRemainderX += event.deltaX * CGFloat(localScrollScale) * multiplier
-            scrollRemainderY += event.deltaY * CGFloat(localScrollScale) * multiplier
+        guard transportMode == .glkvmWebSocket else {
+            sendWebRTCMouseScrollEvent(event)
+            return
+        }
 
-            let dx = clampInt(Int(scrollRemainderX.rounded(.towardZero)), min: -127, max: 127)
-            let dy = clampInt(Int(scrollRemainderY.rounded(.towardZero)), min: -127, max: 127)
+        guard let steps = consumeGLKVMScrollSteps(event) else { return }
 
-            guard dx != 0 || dy != 0 else { return }
-
-            scrollRemainderX -= CGFloat(dx)
-            scrollRemainderY -= CGFloat(dy)
-
+        if let ws = glkvmWebSocketClient {
             Task {
-                try? await ws.sendHidMouseWheel(deltaX: dx, deltaY: dy)
+                do {
+                    try await ws.sendHidMouseWheel(deltaX: steps.dx, deltaY: steps.dy)
+                } catch {
+                    await MainActor.run {
+                        self.sendFallbackMouseScrollSteps(steps, originalEvent: event)
+                    }
+                }
+            }
+        } else {
+            sendFallbackMouseScrollSteps(steps, originalEvent: event)
+        }
+    }
+
+    private func sendFallbackMouseButtonEvent(_ event: MouseButtonEvent) {
+        if transportMode == .glkvmWebSocket,
+           let client = glkvmClient,
+           let button = glkvmMouseButtonName(event.button),
+           isNormalized(event.position) {
+            Task { @MainActor in
+                let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
+                do {
+                    try await client.sendHidMouseMove(toX: toX, toY: toY)
+                    try await client.sendHidMouseButton(button: button, state: event.isDown)
+                    self.lastMouseX = toX
+                    self.lastMouseY = toY
+                } catch {
+                    self.sendWebRTCMouseButtonEvent(event)
+                }
             }
             return
         }
 
+        sendWebRTCMouseButtonEvent(event)
+    }
+
+    private func sendFallbackMouseMoveEvent(_ event: MouseMoveEvent) {
+        if transportMode == .glkvmWebSocket,
+           let client = glkvmClient,
+           isNormalized(event.position) {
+            Task { @MainActor in
+                let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
+                do {
+                    try await client.sendHidMouseMove(toX: toX, toY: toY)
+                    self.lastMouseX = toX
+                    self.lastMouseY = toY
+                } catch {
+                    self.sendWebRTCMouseMoveEvent(event)
+                }
+            }
+            return
+        }
+
+        sendWebRTCMouseMoveEvent(event)
+    }
+
+    private func consumeGLKVMScrollSteps(_ event: MouseScrollEvent) -> (dx: Int, dy: Int)? {
+        let multiplier: CGFloat = reverseScrollDirection ? -1 : 1
+        scrollRemainderX += event.deltaX * CGFloat(localScrollScale) * multiplier
+        scrollRemainderY += event.deltaY * CGFloat(localScrollScale) * multiplier
+
+        let dx = clampInt(Int(scrollRemainderX.rounded(.towardZero)), min: -127, max: 127)
+        let dy = clampInt(Int(scrollRemainderY.rounded(.towardZero)), min: -127, max: 127)
+
+        guard dx != 0 || dy != 0 else { return nil }
+
+        scrollRemainderX -= CGFloat(dx)
+        scrollRemainderY -= CGFloat(dy)
+        return (dx, dy)
+    }
+
+    private func sendFallbackMouseScrollSteps(_ steps: (dx: Int, dy: Int), originalEvent event: MouseScrollEvent) {
+        if transportMode == .glkvmWebSocket,
+           let client = glkvmClient {
+            Task {
+                do {
+                    try await client.sendHidMouseWheel(deltaX: steps.dx, deltaY: steps.dy)
+                } catch {
+                    await MainActor.run {
+                        self.sendWebRTCMouseScrollEvent(event)
+                    }
+                }
+            }
+            return
+        }
+
+        sendWebRTCMouseScrollEvent(event)
+    }
+
+    private func sendWebRTCMouseScrollEvent(_ event: MouseScrollEvent) {
         let inputEvent = InputEvent(
             type: "mouse-scroll",
             data: [
