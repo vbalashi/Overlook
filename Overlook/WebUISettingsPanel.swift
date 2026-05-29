@@ -581,6 +581,20 @@ struct WebUISettingsPanel: View {
                                             focusedStreamerField = nil
                                         }
                                 }
+
+                                    HStack {
+                                        Button("Apply Streamer Params") {
+                                            applyCustomStreamerParamsNow()
+                                        }
+                                        .disabled(streamerState == nil || isApplyingStreamer)
+
+                                        Button("Refresh Streamer Params") {
+                                            Task { await refreshStreamerState() }
+                                        }
+                                        .disabled(kvmDeviceManager.glkvmClient == nil || isApplyingStreamer)
+
+                                        Spacer()
+                                    }
                                 }
                                 .onChange(of: focusedStreamerField) { old, new in
                                     if old != nil, new == nil {
@@ -1296,7 +1310,7 @@ struct WebUISettingsPanel: View {
     }
 
     @MainActor
-    private func commitStreamerEditsAndApplyIfNeeded() {
+    private func commitStreamerEditsAndApplyIfNeeded(scheduleApply: Bool = true) {
         guard isProgrammaticStreamerDraftUpdate == false else { return }
 
         isProgrammaticStreamerDraftUpdate = true
@@ -1334,10 +1348,37 @@ struct WebUISettingsPanel: View {
         streamerH264BitrateText = String(streamerH264Bitrate)
         streamerH264GopText = String(streamerH264Gop)
 
-        // Apply once after commit.
+        if scheduleApply {
+            Task { @MainActor in
+                await Task.yield()
+                scheduleStreamerApply()
+            }
+        }
+    }
+
+    @MainActor
+    private func applyCustomStreamerParamsNow() {
+        focusedStreamerField = nil
+        applyStreamerTask?.cancel()
+        applyStreamerTask = nil
+        commitStreamerEditsAndApplyIfNeeded(scheduleApply: false)
         Task { @MainActor in
-            await Task.yield()
-            scheduleStreamerApply()
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            await applyStreamerParams()
+        }
+    }
+
+    @MainActor
+    private func refreshStreamerState() async {
+        guard let client = kvmDeviceManager.glkvmClient else { return }
+        isApplyingStreamer = true
+        defer { isApplyingStreamer = false }
+        do {
+            let st = try await client.getStreamerState()
+            streamerState = st
+            syncStreamerDraft(from: st)
+        } catch {
+            recordError("Failed to refresh streamer params: \(error)")
         }
     }
 
