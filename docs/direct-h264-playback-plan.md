@@ -604,3 +604,20 @@ Pending:
 - Explicit streamer reset, sleep/wake, and network interruption tests.
 - Render FPS and decode-error counters can be added in final hardening if the
   current diagnostics are not enough during soak testing.
+
+### 2026-05-29: Step 10 Production Hardening
+
+Done:
+
+- Audited the Direct disconnect lifecycle so websocket tasks, reconnect tasks,
+  timers, parser state, and VideoToolbox state are invalidated through the
+  existing explicit backend teardown path.
+- Added render-layer teardown for the Direct `AVSampleBufferDisplayLayer`.
+- Added `docs/direct-h264-troubleshooting.md` with selection, expected stream,
+  failure, and verification notes.
+- Verified parser smoke, decoder smoke, Debug build, and Release build.
+
+Pending:
+
+- Long real-device soak and sleep/wake testing before making Direct H.264 a
+  default or Auto-first backend.

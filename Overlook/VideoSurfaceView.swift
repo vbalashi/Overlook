@@ -481,6 +481,11 @@ final class PixelBufferDisplayView: NSView {
         setup()
     }
 
+    deinit {
+        displayLayer.flushAndRemoveImage()
+        displayLayer.removeFromSuperlayer()
+    }
+
     override func layout() {
         super.layout()
         displayLayer.frame = bounds
