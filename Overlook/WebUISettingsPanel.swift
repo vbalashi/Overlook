@@ -100,9 +100,9 @@ struct WebUISettingsPanel: View {
         ("quality_first", "Smart"),
     ]
     private let transferOptions: [(String, String)] = [
-        ("webrtc", "WebRTC"),
-        ("flex_fec", "WebRTC (FEC)"),
-        ("direct_h264", "Direct H.264"),
+        ("webrtc", "WebRTC mode"),
+        ("flex_fec", "WebRTC FEC mode"),
+        ("direct_h264", "Direct H.264 mode"),
     ]
     private let fecPacketOptions: [(Int, String)] = [
         (5, "5%"),
@@ -354,7 +354,7 @@ struct WebUISettingsPanel: View {
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
 
-                            Picker("Device streamer", selection: bindingString(
+                            Picker("Device mode", selection: bindingString(
                                 get: { $0.videoMode },
                                 set: { $0.videoMode = $1 },
                                 defaultValue: "webrtc"
