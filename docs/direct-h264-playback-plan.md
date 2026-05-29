@@ -547,3 +547,22 @@ Pending:
 - Step 7 will finish OCR/snapshot verification against the active backend.
 - Step 8 will add a user-facing backend selector instead of the internal
   preference.
+
+### 2026-05-29: Step 7 OCR, Snapshot, and Letterbox Integration
+
+Done:
+
+- Confirmed `VideoSurfaceView` snippet OCR reads frames and video dimensions
+  through `VideoPlaybackFrameSource`, so Direct and WebRTC use the same region
+  mapping path.
+- Confirmed the Direct render path reuses `TrackingContainerView`, preserving
+  the same aspect-fit and mouse-coordinate normalization behavior.
+- Updated `AgentServerManager` screenshot/OCR helpers to resolve the active
+  `VideoPlaybackFrameSource` from the backend preference instead of always
+  reading WebRTC frames.
+
+Pending:
+
+- Real-device snippet OCR and Agent screenshot smoke in Direct mode.
+- Step 8 will expose backend selection in the UI so this can be tested without
+  editing defaults.

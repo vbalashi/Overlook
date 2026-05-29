@@ -20,14 +20,30 @@ final class AgentServerManager: ObservableObject {
     private var listener: NWListener?
     private weak var inputManager: InputManager?
     private weak var kvmDeviceManager: KVMDeviceManager?
-    private weak var videoFrameSource: (any VideoPlaybackFrameSource)?
+    private weak var webRTCFrameSource: (any VideoPlaybackFrameSource)?
+    private weak var directH264FrameSource: (any VideoPlaybackFrameSource)?
     private var ocrManager: OCRManager?
 
-    func setup(inputManager: InputManager, kvmDeviceManager: KVMDeviceManager, webRTCManager: WebRTCManager) {
+    func setup(
+        inputManager: InputManager,
+        kvmDeviceManager: KVMDeviceManager,
+        webRTCManager: WebRTCManager,
+        directH264Manager: DirectH264Manager
+    ) {
         self.inputManager = inputManager
         self.kvmDeviceManager = kvmDeviceManager
-        self.videoFrameSource = webRTCManager
+        self.webRTCFrameSource = webRTCManager
+        self.directH264FrameSource = directH264Manager
         self.ocrManager = OCRManager()
+    }
+
+    private var videoFrameSource: (any VideoPlaybackFrameSource)? {
+        switch VideoPlaybackBackendPreference.selectedKind {
+        case .webRTC:
+            return webRTCFrameSource
+        case .directH264:
+            return directH264FrameSource
+        }
     }
 
     // MARK: - API Key

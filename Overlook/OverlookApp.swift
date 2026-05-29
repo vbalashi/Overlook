@@ -156,7 +156,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = false
         OverlookLog.info("Application launched. logPath=\(OverlookLog.fileURL.path)")
-        agentServerManager.setup(inputManager: inputManager, kvmDeviceManager: kvmDeviceManager, webRTCManager: webRTCManager)
+        agentServerManager.setup(
+            inputManager: inputManager,
+            kvmDeviceManager: kvmDeviceManager,
+            webRTCManager: webRTCManager,
+            directH264Manager: directH264Manager
+        )
         if UserDefaults.standard.bool(forKey: AgentServerManager.enabledDefaultsKey) {
             agentServerManager.start()
         }
