@@ -200,21 +200,22 @@ struct ContentView: View {
                     isScanning: kvmDeviceManager.isScanning,
                     devices: kvmDeviceManager.availableDevices,
                     connectedDeviceName: kvmDeviceManager.connectedDevice?.name,
-                    latency: webRTCManager.latency,
-                    videoSize: webRTCManager.videoSize,
-                    inboundVideoKbps: webRTCManager.inboundVideoKbps,
-                    inboundFps: webRTCManager.inboundFps,
-                    inboundVideoPlayoutDelayMs: webRTCManager.inboundVideoPlayoutDelayMs,
-                    inboundVideoJitterMs: webRTCManager.inboundVideoJitterMs,
-                    inboundVideoDecodeMs: webRTCManager.inboundVideoDecodeMs,
-                    inboundVideoPacketsLost: webRTCManager.inboundVideoPacketsLost,
-                    iceCurrentRoundTripTimeMs: webRTCManager.iceCurrentRoundTripTimeMs,
+                    videoBackendName: activeVideoBackendKind.displayName,
+                    latency: activeVideoStatus.latency,
+                    videoSize: activeVideoStatus.videoSize,
+                    inboundVideoKbps: activeVideoStatus.inboundVideoKbps,
+                    inboundFps: activeVideoStatus.inboundFps,
+                    inboundVideoPlayoutDelayMs: activeVideoStatus.inboundVideoPlayoutDelayMs,
+                    inboundVideoJitterMs: activeVideoStatus.inboundVideoJitterMs,
+                    inboundVideoDecodeMs: activeVideoStatus.inboundVideoDecodeMs,
+                    inboundVideoPacketsLost: activeVideoStatus.inboundVideoPacketsLost,
+                    iceCurrentRoundTripTimeMs: activeVideoStatus.iceCurrentRoundTripTimeMs,
                     inboundAudioKbps: webRTCManager.inboundAudioKbps,
                     inboundAudioPlayoutDelayMs: webRTCManager.inboundAudioPlayoutDelayMs,
                     inboundAudioJitterMs: webRTCManager.inboundAudioJitterMs,
                     inboundAudioPacketsLost: webRTCManager.inboundAudioPacketsLost,
                     audioIceCurrentRoundTripTimeMs: webRTCManager.audioIceCurrentRoundTripTimeMs,
-                    sessionVideoBytesReceived: webRTCManager.sessionVideoBytesReceived,
+                    sessionVideoBytesReceived: activeVideoStatus.sessionVideoBytesReceived,
                     sessionAudioBytesReceived: webRTCManager.sessionAudioBytesReceived,
                     sessionAudioBytesSent: webRTCManager.sessionAudioBytesSent,
                     isConnectionBusy: isConnectionBusy,
@@ -281,6 +282,9 @@ struct ContentView: View {
         }
         .onChange(of: reduceHiddenStreamQuality) { _, _ in
             scheduleHiddenStreamQualityUpdate()
+        }
+        .onChange(of: videoBackendRawValue) { oldValue, newValue in
+            handleVideoBackendPreferenceChanged(oldValue: oldValue, newValue: newValue)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didEnterFullScreenNotification)) { note in
             guard let window = note.object as? NSWindow else { return }
@@ -524,6 +528,31 @@ struct ContentView: View {
             try? await Task.sleep(nanoseconds: 300_000_000)
             connectToDevice(device)
         }
+    }
+
+    private func handleVideoBackendPreferenceChanged(oldValue: String, newValue: String) {
+        guard oldValue != newValue else { return }
+        guard VideoPlaybackBackendKind(rawValue: newValue) != nil else {
+            videoBackendRawValue = VideoPlaybackBackendKind.webRTC.rawValue
+            return
+        }
+
+        OverlookLog.info("Video backend preference changed old=\(oldValue) new=\(newValue)")
+        connectionErrorMessage = nil
+
+        guard isConnected else {
+            webRTCManager.disconnect()
+            directH264Manager.disconnect()
+            return
+        }
+
+        guard isStreamPaused == false else {
+            webRTCManager.disconnect()
+            directH264Manager.disconnect()
+            return
+        }
+
+        reconnectCurrentSession()
     }
 
     private func setAudioOutputMuted(_ muted: Bool) {
@@ -1255,6 +1284,7 @@ struct ConnectionsPopoverView: View {
     let isScanning: Bool
     let devices: [KVMDevice]
     let connectedDeviceName: String?
+    let videoBackendName: String
     let latency: Int
 
     let videoSize: CGSize?
@@ -1381,7 +1411,7 @@ struct ConnectionsPopoverView: View {
             }
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("WebRTC")
+                Text(videoBackendName)
                     .font(.caption)
                     .foregroundColor(.secondary)
 
@@ -1530,6 +1560,7 @@ struct ConnectionsPopoverView: View {
 #Preview {
     ContentView()
         .environmentObject(WebRTCManager())
+        .environmentObject(DirectH264Manager())
         .environmentObject(InputManager())
         .environmentObject(OCRManager())
         .environmentObject(KVMDeviceManager())

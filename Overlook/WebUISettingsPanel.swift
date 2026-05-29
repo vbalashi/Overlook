@@ -13,6 +13,7 @@ struct WebUISettingsPanel: View {
     @AppStorage(TrackingContainerView.hideSystemCursorDefaultsKey) private var hideSystemCursorOverStream: Bool = false
     @AppStorage("overlook.autoResumeLastConnection") private var autoResumeLastConnection: Bool = false
     @AppStorage("overlook.reduceHiddenStreamQuality") private var reduceHiddenStreamQuality: Bool = true
+    @AppStorage(VideoPlaybackBackendPreference.defaultsKey) private var videoBackendRawValue: String = VideoPlaybackBackendKind.webRTC.rawValue
 
     @AppStorage("overlook.audio.inputDeviceUID") private var audioInputDeviceUID: String = ""
     @AppStorage("overlook.audio.outputDeviceUID") private var audioOutputDeviceUID: String = ""
@@ -316,6 +317,12 @@ struct WebUISettingsPanel: View {
                 VStack(alignment: .leading, spacing: 14) {
                     DisclosureGroup("Video", isExpanded: $isVideoExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
+                            Picker("Playback", selection: $videoBackendRawValue) {
+                                ForEach(VideoPlaybackBackendKind.allCases) { backend in
+                                    Text(backend.displayName).tag(backend.rawValue)
+                                }
+                            }
+
                             let modeBinding = bindingString(
                                 get: { $0.videoProcessing },
                                 set: { $0.videoProcessing = $1 },

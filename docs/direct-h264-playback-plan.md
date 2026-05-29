@@ -566,3 +566,21 @@ Pending:
 - Real-device snippet OCR and Agent screenshot smoke in Direct mode.
 - Step 8 will expose backend selection in the UI so this can be tested without
   editing defaults.
+
+### 2026-05-29: Step 8 UI Selection and Fallback
+
+Done:
+
+- Added a Settings > Video playback selector for WebRTC and Direct H.264.
+- Updated connection diagnostics to label and read video stats from the active
+  backend instead of always showing WebRTC video stats.
+- Reconnect overlays now disable against the active backend's connecting state.
+- Changing playback backend during an active unpaused session triggers a normal
+  reconnect so the selected backend owns the video websocket cleanly.
+
+Pending:
+
+- Auto fallback is intentionally deferred until Direct health/reconnect
+  hardening exists; explicit Direct mode should surface Direct failures instead
+  of silently hiding them.
+- Real-device UI toggle smoke between WebRTC and Direct H.264.

@@ -198,7 +198,7 @@ struct VideoSurfaceView: View {
                             onReconnect()
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(webRTCManager.isConnecting)
+                        .disabled(videoStatus.isConnecting)
                     }
                     .padding(14)
                     .background(.ultraThinMaterial)
