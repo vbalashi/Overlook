@@ -55,8 +55,14 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
     private var webSocketTask: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var heartbeatTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
     private var statsTimer: Timer?
     private var generation = 0
+    private var activeDevice: KVMDevice?
+    private var isManualDisconnect = true
+    private var reconnectAttempt = 0
+    private let maxReconnectDelaySeconds: Double = 10
+    private let stallReconnectThresholdSeconds = 10
 
     private var videoBytesReceived: Int64 = 0
     private var videoFramesReceived: Int64 = 0
@@ -71,10 +77,21 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
     private let decoder = DirectH264VideoDecoder()
 
     func connect(to device: KVMDevice) async throws {
-        disconnect()
+        try await connect(to: device, resetReconnectAttempts: true)
+    }
+
+    private func connect(to device: KVMDevice, resetReconnectAttempts: Bool) async throws {
+        stopConnection(clearFrameState: true, manual: false)
         generation += 1
         let currentGeneration = generation
 
+        activeDevice = device
+        isManualDisconnect = false
+        reconnectTask?.cancel()
+        reconnectTask = nil
+        if resetReconnectAttempts {
+            reconnectAttempt = 0
+        }
         isConnecting = true
         isStreamStalled = false
         lastDisconnectReason = nil
@@ -119,11 +136,23 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         do {
             try await connect(to: device)
         } catch {
-            markDisconnected(reason: "Direct H.264 reconnect failed: \(error.localizedDescription)")
+            markDisconnected(reason: "Direct H.264 reconnect failed: \(error.localizedDescription)", shouldScheduleReconnect: true)
         }
     }
 
     func disconnect() {
+        activeDevice = nil
+        reconnectAttempt = 0
+        stopConnection(clearFrameState: true, manual: true)
+    }
+
+    private func stopConnection(clearFrameState: Bool, manual: Bool) {
+        if manual {
+            isManualDisconnect = true
+            reconnectTask?.cancel()
+            reconnectTask = nil
+        }
+
         generation += 1
         receiveTask?.cancel()
         receiveTask = nil
@@ -141,9 +170,11 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         hasEverConnectedToStream = false
         isStreamStalled = false
         lastVideoFrameAgeSeconds = nil
-        currentFrame = nil
-        videoSize = nil
-        sourceContentRectInVideo = nil
+        if clearFrameState {
+            currentFrame = nil
+            videoSize = nil
+            sourceContentRectInVideo = nil
+        }
         inboundVideoKbps = nil
         inboundFps = nil
         inboundVideoPlayoutDelayMs = nil
@@ -172,7 +203,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
                 handle(message)
             } catch {
                 guard !Task.isCancelled, generation == self.generation else { return }
-                markDisconnected(reason: "Direct H.264 websocket receive failed: \(error.localizedDescription)")
+                markDisconnected(reason: "Direct H.264 websocket receive failed: \(error.localizedDescription)", shouldScheduleReconnect: true)
                 return
             }
         }
@@ -186,7 +217,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
                 try await webSocketTask?.send(.data(Data([0])))
             } catch {
                 guard !Task.isCancelled, generation == self.generation else { return }
-                markDisconnected(reason: "Direct H.264 heartbeat failed: \(error.localizedDescription)")
+                markDisconnected(reason: "Direct H.264 heartbeat failed: \(error.localizedDescription)", shouldScheduleReconnect: true)
                 return
             }
         }
@@ -203,7 +234,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
                     OverlookLog.info("Direct H.264 start message sent")
                 } catch {
                     await MainActor.run {
-                        self?.markDisconnected(reason: "Direct H.264 start failed: \(error.localizedDescription)")
+                        self?.markDisconnected(reason: "Direct H.264 start failed: \(error.localizedDescription)", shouldScheduleReconnect: true)
                     }
                 }
             }
@@ -299,24 +330,49 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
             let age = Int(now.timeIntervalSince(lastFrameAt).rounded(.down))
             lastVideoFrameAgeSeconds = age
             isStreamStalled = age >= 5
+            if age >= stallReconnectThresholdSeconds {
+                markDisconnected(reason: "Direct H.264 stream stalled for \(age)s", shouldScheduleReconnect: true)
+            }
         }
     }
 
-    private func markDisconnected(reason: String) {
+    private func markDisconnected(reason: String, shouldScheduleReconnect: Bool) {
         OverlookLog.error(reason)
         lastDisconnectReason = reason
-        isConnected = false
-        isConnecting = false
-        receiveTask?.cancel()
-        receiveTask = nil
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
-        statsTimer?.invalidate()
-        statsTimer = nil
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
-        webSocketTask = nil
-        session?.invalidateAndCancel()
-        session = nil
+        stopConnection(clearFrameState: false, manual: false)
+        if shouldScheduleReconnect {
+            scheduleReconnect(reason: reason)
+        }
+    }
+
+    private func scheduleReconnect(reason: String) {
+        guard !isManualDisconnect, reconnectTask == nil, let device = activeDevice else { return }
+
+        reconnectAttempt += 1
+        let delay = min(pow(2.0, Double(max(0, reconnectAttempt - 1))), maxReconnectDelaySeconds)
+        lastDisconnectReason = "\(reason). Reconnecting in \(Int(delay))s."
+        isConnecting = true
+
+        OverlookLog.info("Direct H.264 reconnect scheduled attempt=\(self.reconnectAttempt) delaySeconds=\(delay) host=\(device.host) port=\(device.port)")
+
+        reconnectTask = Task { [weak self] in
+            let delayNanoseconds = UInt64(delay * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                guard let self, !self.isManualDisconnect, self.reconnectTask != nil else { return }
+                self.reconnectTask = nil
+                Task { @MainActor in
+                    do {
+                        try await self.connect(to: device, resetReconnectAttempts: false)
+                        OverlookLog.info("Direct H.264 reconnect attempt started attempt=\(self.reconnectAttempt) host=\(device.host) port=\(device.port)")
+                    } catch {
+                        self.markDisconnected(reason: "Direct H.264 reconnect attempt failed: \(error.localizedDescription)", shouldScheduleReconnect: true)
+                    }
+                }
+            }
+        }
     }
 
     private func resetCounters() {

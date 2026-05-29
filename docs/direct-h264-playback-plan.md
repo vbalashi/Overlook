@@ -584,3 +584,23 @@ Pending:
   hardening exists; explicit Direct mode should surface Direct failures instead
   of silently hiding them.
 - Real-device UI toggle smoke between WebRTC and Direct H.264.
+
+### 2026-05-29: Step 9 Direct Health, Reconnect, and Stats
+
+Done:
+
+- Added Direct H.264 reconnect scheduling for websocket receive errors,
+  heartbeat send errors, and start-message failures.
+- Added stall recovery: if decoded Direct video stops advancing past the stall
+  threshold, the backend tears down the media websocket and schedules reconnect.
+- Kept the last decoded frame visible during transient Direct reconnects while
+  surfacing the reconnect reason in backend state.
+- Reused existing Direct stats for active backend diagnostics: bitrate, fps,
+  frame age, stalled state, and session video bytes.
+
+Pending:
+
+- 30-60 minute real-device Direct session.
+- Explicit streamer reset, sleep/wake, and network interruption tests.
+- Render FPS and decode-error counters can be added in final hardening if the
+  current diagnostics are not enough during soak testing.
