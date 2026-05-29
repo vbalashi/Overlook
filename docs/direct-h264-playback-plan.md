@@ -471,3 +471,21 @@ Pending:
 
 - Step 3 will add the first Direct H.264 backend implementation behind this
   boundary.
+
+### 2026-05-29: Step 3 Direct H.264 Connection Skeleton
+
+Done:
+
+- Added `DirectH264Manager` as a video-only backend skeleton.
+- Implemented `/api/media/ws` websocket connect/disconnect lifecycle using the
+  existing `GLKVMClient` URL, auth cookie, Origin, and TLS behavior.
+- Implemented media metadata handling, WebUI-compatible H.264 start, binary
+  heartbeat, byte/frame/keyframe counters, and basic stall stats.
+- Kept Direct H.264 out of the visible UI path; WebRTC remains the active app
+  backend.
+
+Pending:
+
+- Wire backend selection into the app in a later step.
+- Step 4 will add a real H.264 parser; the current Direct backend only counts
+  frames and bytes.

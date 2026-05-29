@@ -27,6 +27,7 @@
 		0100001A /* ContentControlBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000019 /* ContentControlBar.swift */; };
 		0100001B /* VideoSurfaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200001A /* VideoSurfaceView.swift */; };
 		01000054 /* VideoPlaybackBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000054 /* VideoPlaybackBackend.swift */; };
+		01000055 /* DirectH264Manager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02000055 /* DirectH264Manager.swift */; };
 		0100001C /* StatusBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200001B /* StatusBarView.swift */; };
 		0100001D /* CoreAudioDevices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200001C /* CoreAudioDevices.swift */; };
 		0100001E /* WebRTCAudioDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0200001D /* WebRTCAudioDevice.swift */; };
@@ -58,6 +59,7 @@
 		02000019 /* ContentControlBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentControlBar.swift; sourceTree = "<group>"; };
 		0200001A /* VideoSurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoSurfaceView.swift; sourceTree = "<group>"; };
 		02000054 /* VideoPlaybackBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoPlaybackBackend.swift; sourceTree = "<group>"; };
+		02000055 /* DirectH264Manager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectH264Manager.swift; sourceTree = "<group>"; };
 		0200001B /* StatusBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarView.swift; sourceTree = "<group>"; };
 		0200001C /* CoreAudioDevices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoreAudioDevices.swift; sourceTree = "<group>"; };
 		0200001D /* WebRTCAudioDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebRTCAudioDevice.swift; sourceTree = "<group>"; };
@@ -100,6 +102,7 @@
 				02000019 /* ContentControlBar.swift */,
 				0200001A /* VideoSurfaceView.swift */,
 				02000054 /* VideoPlaybackBackend.swift */,
+				02000055 /* DirectH264Manager.swift */,
 				0200001B /* StatusBarView.swift */,
 				02000017 /* OCRViews.swift */,
 				02000018 /* ConnectSheets.swift */,
@@ -219,6 +222,7 @@
 				0100001A /* ContentControlBar.swift in Sources */,
 				0100001B /* VideoSurfaceView.swift in Sources */,
 				01000054 /* VideoPlaybackBackend.swift in Sources */,
+				01000055 /* DirectH264Manager.swift in Sources */,
 				0100001C /* StatusBarView.swift in Sources */,
 				01000017 /* WebUISettingsPanel.swift in Sources */,
 				01000018 /* OCRViews.swift in Sources */,

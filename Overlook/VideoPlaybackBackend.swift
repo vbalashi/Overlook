@@ -20,6 +20,23 @@ enum VideoPlaybackBackendKind: String, CaseIterable, Identifiable {
     }
 }
 
+enum VideoPlaybackBackendPreference {
+    static let defaultsKey = "overlook.videoPlaybackBackend"
+
+    static var selectedKind: VideoPlaybackBackendKind {
+        get {
+            guard let rawValue = UserDefaults.standard.string(forKey: defaultsKey),
+                  let kind = VideoPlaybackBackendKind(rawValue: rawValue) else {
+                return .webRTC
+            }
+            return kind
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey)
+        }
+    }
+}
+
 @MainActor
 protocol VideoPlaybackFrameSource: AnyObject {
     var currentFrame: CVPixelBuffer? { get }
