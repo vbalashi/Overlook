@@ -1,5 +1,7 @@
 import SwiftUI
 import AppKit
+import AVFoundation
+import CoreMedia
 #if canImport(CoreVideo)
 import CoreVideo
 #endif
@@ -9,6 +11,7 @@ import WebRTC
 
 struct VideoSurfaceView: View {
     @EnvironmentObject var webRTCManager: WebRTCManager
+    @EnvironmentObject var directH264Manager: DirectH264Manager
     @EnvironmentObject var inputManager: InputManager
     @EnvironmentObject var ocrManager: OCRManager
 
@@ -24,6 +27,7 @@ struct VideoSurfaceView: View {
 
     @State private var isHoveringStream = false
     @AppStorage(TrackingContainerView.hideSystemCursorDefaultsKey) private var hideSystemCursorOverStream: Bool = false
+    @AppStorage(VideoPlaybackBackendPreference.defaultsKey) private var videoBackendRawValue: String = VideoPlaybackBackendKind.webRTC.rawValue
 
     private var snippetSelectionRect: CGRect? {
         guard let start = snippetDragStart, let current = snippetDragCurrent else { return nil }
@@ -35,11 +39,15 @@ struct VideoSurfaceView: View {
     }
 
     private var videoStatus: any VideoPlaybackStatusProviding {
-        webRTCManager
+        activeBackendKind == .directH264 ? directH264Manager : webRTCManager
     }
 
     private var videoFrameSource: any VideoPlaybackFrameSource {
-        webRTCManager
+        activeBackendKind == .directH264 ? directH264Manager : webRTCManager
+    }
+
+    private var activeBackendKind: VideoPlaybackBackendKind {
+        VideoPlaybackBackendKind(rawValue: videoBackendRawValue) ?? .webRTC
     }
 
     var body: some View {
@@ -48,7 +56,34 @@ struct VideoSurfaceView: View {
                 Color.black
 
 #if canImport(WebRTC)
-                if let videoView = webRTCManager.videoView {
+                if activeBackendKind == .directH264 {
+                    DirectVideoViewRepresentable(
+                        pixelBuffer: directH264Manager.currentFrame,
+                        onMouseMove: { pointInView in
+                            guard !isSnippetModeActive else { return }
+                            inputManager.handleVideoMouseMove(
+                                pointInView: pointInView,
+                                viewSize: geometry.size,
+                                videoSize: currentVideoSize()
+                            )
+                        },
+                        onMouseButton: { button, isDown, pointInView in
+                            guard !isSnippetModeActive else { return }
+                            inputManager.handleVideoMouseButton(
+                                button: button,
+                                isDown: isDown,
+                                pointInView: pointInView,
+                                viewSize: geometry.size,
+                                videoSize: currentVideoSize()
+                            )
+                        },
+                        onScrollWheel: { deltaX, deltaY in
+                            guard !isSnippetModeActive else { return }
+                            inputManager.handleVideoMouseScroll(deltaX: deltaX, deltaY: deltaY)
+                        }
+                    )
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+                } else if let videoView = webRTCManager.videoView {
                     VideoViewRepresentable(
                         videoView: videoView,
                         onMouseMove: { pointInView in
@@ -400,6 +435,120 @@ struct VideoViewRepresentable: NSViewRepresentable {
     }
 }
 
+struct DirectVideoViewRepresentable: NSViewRepresentable {
+    let pixelBuffer: CVPixelBuffer?
+    let onMouseMove: (CGPoint) -> Void
+    let onMouseButton: (MouseButton, Bool, CGPoint) -> Void
+    let onScrollWheel: (CGFloat, CGFloat) -> Void
+
+    func makeNSView(context: Context) -> TrackingContainerView {
+        let container = TrackingContainerView()
+        container.onMouseMove = onMouseMove
+        container.onMouseButton = onMouseButton
+        container.onScrollWheel = onScrollWheel
+        container.embedDirectVideoViewIfNeeded(context.coordinator.displayView)
+        context.coordinator.displayView.display(pixelBuffer)
+        return container
+    }
+
+    func updateNSView(_ nsView: TrackingContainerView, context: Context) {
+        nsView.onMouseMove = onMouseMove
+        nsView.onMouseButton = onMouseButton
+        nsView.onScrollWheel = onScrollWheel
+        nsView.embedDirectVideoViewIfNeeded(context.coordinator.displayView)
+        context.coordinator.displayView.display(pixelBuffer)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator {
+        let displayView = PixelBufferDisplayView()
+    }
+}
+
+final class PixelBufferDisplayView: NSView {
+    private let displayLayer = AVSampleBufferDisplayLayer()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    override func layout() {
+        super.layout()
+        displayLayer.frame = bounds
+    }
+
+    func display(_ pixelBuffer: CVPixelBuffer?) {
+        guard let pixelBuffer else { return }
+
+        if displayLayer.status == .failed {
+            displayLayer.flushAndRemoveImage()
+        }
+
+        guard let sampleBuffer = Self.makeSampleBuffer(pixelBuffer: pixelBuffer) else {
+            return
+        }
+
+        if displayLayer.isReadyForMoreMediaData {
+            displayLayer.enqueue(sampleBuffer)
+        } else {
+            displayLayer.flush()
+            displayLayer.enqueue(sampleBuffer)
+        }
+    }
+
+    private func setup() {
+        wantsLayer = true
+        displayLayer.videoGravity = .resizeAspect
+        displayLayer.backgroundColor = NSColor.black.cgColor
+        layer?.addSublayer(displayLayer)
+    }
+
+    private static func makeSampleBuffer(pixelBuffer: CVPixelBuffer) -> CMSampleBuffer? {
+        var formatDescription: CMVideoFormatDescription?
+        var status = CMVideoFormatDescriptionCreateForImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: pixelBuffer,
+            formatDescriptionOut: &formatDescription
+        )
+        guard status == noErr, let formatDescription else { return nil }
+
+        var timing = CMSampleTimingInfo(
+            duration: .invalid,
+            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            decodeTimeStamp: .invalid
+        )
+        var sampleBuffer: CMSampleBuffer?
+        status = CMSampleBufferCreateReadyWithImageBuffer(
+            allocator: kCFAllocatorDefault,
+            imageBuffer: pixelBuffer,
+            formatDescription: formatDescription,
+            sampleTiming: &timing,
+            sampleBufferOut: &sampleBuffer
+        )
+        guard status == noErr, let sampleBuffer else { return nil }
+
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true) {
+            let attachment = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(
+                attachment,
+                Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
+            )
+        }
+
+        return sampleBuffer
+    }
+}
+
 final class TrackingContainerView: NSView {
     var onMouseMove: ((CGPoint) -> Void)?
     var onMouseMoveWithLayerInfo: ((CGPoint, String) -> Void)?
@@ -411,6 +560,7 @@ final class TrackingContainerView: NSView {
     private var trackingAreaRef: NSTrackingArea?
 
     private weak var embeddedVideoView: RTCMTLNSVideoView?
+    private weak var embeddedDirectVideoView: PixelBufferDisplayView?
     private var embeddedConstraints: [NSLayoutConstraint] = []
 
     override init(frame frameRect: NSRect) {
@@ -458,7 +608,35 @@ final class TrackingContainerView: NSView {
         }
 
         embeddedVideoView?.removeFromSuperview()
+        embeddedDirectVideoView?.removeFromSuperview()
+        embeddedDirectVideoView = nil
         embeddedVideoView = videoView
+
+        videoView.removeFromSuperview()
+        addSubview(videoView)
+
+        videoView.translatesAutoresizingMaskIntoConstraints = false
+        embeddedConstraints = [
+            videoView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            videoView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            videoView.topAnchor.constraint(equalTo: topAnchor),
+            videoView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ]
+        NSLayoutConstraint.activate(embeddedConstraints)
+    }
+
+    func embedDirectVideoViewIfNeeded(_ videoView: PixelBufferDisplayView) {
+        guard embeddedDirectVideoView !== videoView else { return }
+
+        if !embeddedConstraints.isEmpty {
+            NSLayoutConstraint.deactivate(embeddedConstraints)
+            embeddedConstraints.removeAll()
+        }
+
+        embeddedVideoView?.removeFromSuperview()
+        embeddedVideoView = nil
+        embeddedDirectVideoView?.removeFromSuperview()
+        embeddedDirectVideoView = videoView
 
         videoView.removeFromSuperview()
         addSubview(videoView)

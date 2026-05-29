@@ -527,3 +527,23 @@ Done:
 Pending:
 
 - Step 6 will add the native render surface and visible Direct playback path.
+
+### 2026-05-29: Step 6 Native Render Surface
+
+Done:
+
+- Added a native `AVSampleBufferDisplayLayer` render surface for decoded Direct
+  `CVPixelBuffer` frames.
+- Registered `DirectH264Manager` in the app environment.
+- Wired the existing development backend preference into connection, status,
+  window sizing, and `VideoSurfaceView` rendering.
+- Kept WebRTC as the default backend; Direct H.264 remains opt-in until the UI
+  selection step.
+- Reused the existing tracking container so Direct mode keeps the same mouse
+  move, click, scroll, aspect-fit, and letterbox coordinate path as WebRTC.
+
+Pending:
+
+- Step 7 will finish OCR/snapshot verification against the active backend.
+- Step 8 will add a user-facing backend selector instead of the internal
+  preference.

@@ -18,6 +18,7 @@ struct OverlookApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appDelegate.webRTCManager)
+                .environmentObject(appDelegate.directH264Manager)
                 .environmentObject(appDelegate.inputManager)
                 .environmentObject(appDelegate.ocrManager)
                 .environmentObject(appDelegate.kvmDeviceManager)
@@ -141,6 +142,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var menuBarAgent: MenuBarAgent?
 
     let webRTCManager = WebRTCManager()
+    let directH264Manager = DirectH264Manager()
     let inputManager = InputManager()
     let ocrManager = OCRManager()
     let kvmDeviceManager = KVMDeviceManager()

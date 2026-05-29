@@ -4,6 +4,7 @@ import AppKit
 
 struct ContentView: View {
     @EnvironmentObject var webRTCManager: WebRTCManager
+    @EnvironmentObject var directH264Manager: DirectH264Manager
     @EnvironmentObject var inputManager: InputManager
     @EnvironmentObject var ocrManager: OCRManager
     @EnvironmentObject var kvmDeviceManager: KVMDeviceManager
@@ -47,6 +48,7 @@ struct ContentView: View {
     @AppStorage("overlook.appAppearance") private var appAppearance: String = "system"
     @AppStorage("overlook.autoResumeLastConnection") private var autoResumeLastConnection: Bool = false
     @AppStorage("overlook.reduceHiddenStreamQuality") private var reduceHiddenStreamQuality: Bool = true
+    @AppStorage(VideoPlaybackBackendPreference.defaultsKey) private var videoBackendRawValue: String = VideoPlaybackBackendKind.webRTC.rawValue
 
     private struct HiddenStreamSnapshot {
         let desiredFps: Int?
@@ -66,6 +68,14 @@ struct ContentView: View {
         default:
             return nil
         }
+    }
+
+    private var activeVideoBackendKind: VideoPlaybackBackendKind {
+        VideoPlaybackBackendKind(rawValue: videoBackendRawValue) ?? .webRTC
+    }
+
+    private var activeVideoStatus: any VideoPlaybackStatusProviding {
+        activeVideoBackendKind == .directH264 ? directH264Manager : webRTCManager
     }
 
     private var windowTitle: String {
@@ -90,21 +100,21 @@ struct ContentView: View {
         }
 
         let resolution: String
-        if let size = webRTCManager.videoSize {
+        if let size = activeVideoStatus.videoSize {
             resolution = "\(Int(size.width))x\(Int(size.height))"
         } else {
             resolution = "—"
         }
 
         let kbps: String
-        if let value = webRTCManager.inboundVideoKbps {
+        if let value = activeVideoStatus.inboundVideoKbps {
             kbps = "\(value) kbps"
         } else {
             kbps = "— kbps"
         }
 
         let fps: String
-        if let value = webRTCManager.inboundFps {
+        if let value = activeVideoStatus.inboundFps {
             fps = "\(Int(value.rounded())) fps dynamic"
         } else {
             fps = "— fps dynamic"
@@ -236,7 +246,7 @@ struct ContentView: View {
             .animation(.easeInOut(duration: 0.2), value: showingConnections)
             .allowsHitTesting(showingConnections)
         }
-        .background(WindowAspectRatioSetter(videoSize: webRTCManager.videoSize))
+        .background(WindowAspectRatioSetter(videoSize: activeVideoStatus.videoSize))
         .background(WindowTitleSetter(title: windowTitle))
         .background(WindowReferenceSetter(window: $windowRef))
         .preferredColorScheme(preferredColorScheme)
@@ -445,15 +455,23 @@ struct ContentView: View {
                     try? await client.setHidConnected(true)
                 }
 
- #if canImport(WebRTC)
+#if canImport(WebRTC)
                 do {
-                    try await webRTCManager.connect(to: connectedDevice)
-                    OverlookLog.info("WebRTC connect succeeded host=\(connectedDevice.host) port=\(connectedDevice.port)")
+                    webRTCManager.disconnect()
+                    directH264Manager.disconnect()
+                    switch activeVideoBackendKind {
+                    case .webRTC:
+                        try await webRTCManager.connect(to: connectedDevice)
+                        OverlookLog.info("WebRTC connect succeeded host=\(connectedDevice.host) port=\(connectedDevice.port)")
+                    case .directH264:
+                        try await directH264Manager.connect(to: connectedDevice)
+                        OverlookLog.info("Direct H.264 connect succeeded host=\(connectedDevice.host) port=\(connectedDevice.port)")
+                    }
                 } catch {
-                    OverlookLog.error("WebRTC connect failed host=\(connectedDevice.host) port=\(connectedDevice.port) error=\(OverlookLog.describe(error))")
-                    print("WebRTC connect failed (API is still connected): \(error)")
+                    OverlookLog.error("Video backend connect failed backend=\(activeVideoBackendKind.rawValue) host=\(connectedDevice.host) port=\(connectedDevice.port) error=\(OverlookLog.describe(error))")
+                    print("Video backend connect failed (API is still connected): \(error)")
                 }
- #endif
+#endif
             } catch {
                 if let kvmError = error as? KVMError, kvmError == .authenticationFailed {
                     pendingPasswordDevice = device
@@ -497,6 +515,7 @@ struct ContentView: View {
         Task { @MainActor in
             await restoreHiddenStreamQualityIfNeeded()
             webRTCManager.disconnect()
+            directH264Manager.disconnect()
             inputManager.setGLKVMClient(nil)
             inputManager.stopFullInputCapture()
             kvmDeviceManager.disconnectFromDevice()
@@ -562,6 +581,7 @@ struct ContentView: View {
                 defer { isConnectionBusy = false }
                 await restoreHiddenStreamQualityIfNeeded()
                 webRTCManager.disconnect()
+                directH264Manager.disconnect()
                 try? await client?.setHidConnected(false)
                 kvmDeviceManager.disconnectFromDevice()
                 inputManager.setGLKVMClient(nil)
@@ -603,6 +623,7 @@ struct ContentView: View {
         Task { @MainActor in
             await restoreHiddenStreamQualityIfNeeded()
             webRTCManager.disconnect()
+            directH264Manager.disconnect()
             inputManager.stopFullInputCapture()
         }
     }
@@ -621,7 +642,12 @@ struct ContentView: View {
         Task { @MainActor in
             defer { isConnectionBusy = false }
             do {
-                try await webRTCManager.connect(to: device)
+                switch activeVideoBackendKind {
+                case .webRTC:
+                    try await webRTCManager.connect(to: device)
+                case .directH264:
+                    try await directH264Manager.connect(to: device)
+                }
                 if kvmDeviceManager.glkvmClient != nil {
                     inputManager.setGLKVMClient(kvmDeviceManager.glkvmClient)
                     inputManager.startFullInputCapture()
@@ -630,9 +656,9 @@ struct ContentView: View {
                 pausedStreamDevice = nil
                 isConnected = true
                 scheduleHiddenStreamQualityUpdate()
-                OverlookLog.info("Manual stream resume succeeded host=\(device.host) port=\(device.port)")
+                OverlookLog.info("Manual stream resume succeeded backend=\(activeVideoBackendKind.rawValue) host=\(device.host) port=\(device.port)")
             } catch {
-                connectionErrorMessage = "Failed to resume WebRTC stream: \(connectionErrorDetail(error))"
+                connectionErrorMessage = "Failed to resume video stream: \(connectionErrorDetail(error))"
                 OverlookLog.error("Manual stream resume failed host=\(device.host) port=\(device.port) error=\(OverlookLog.describe(error))")
             }
         }
