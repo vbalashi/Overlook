@@ -236,7 +236,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         while !Task.isCancelled, generation == self.generation {
             do {
                 let message = try await webSocketTask.receive()
-                await handle(message)
+                handle(message)
             } catch {
                 guard !Task.isCancelled, generation == self.generation else { return }
                 markDisconnected(reason: "Direct H.264 websocket receive failed: \(error.localizedDescription)", shouldScheduleReconnect: true)
@@ -259,25 +259,29 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         }
     }
 
-    private func handle(_ message: URLSessionWebSocketTask.Message) async {
+    private func handle(_ message: URLSessionWebSocketTask.Message) {
         switch message {
         case .string(let text):
             guard !h264StartSent, shouldStartH264(from: text) else { return }
             h264StartSent = true
-            do {
-                try await webSocketTask?.send(.string(Self.h264StartMessage))
-                OverlookLog.info("Direct H.264 start message sent")
-            } catch {
-                markDisconnected(reason: "Direct H.264 start failed: \(error.localizedDescription)", shouldScheduleReconnect: true)
+            Task { [weak self] in
+                do {
+                    try await self?.webSocketTask?.send(.string(Self.h264StartMessage))
+                    OverlookLog.info("Direct H.264 start message sent")
+                } catch {
+                    await MainActor.run {
+                        self?.markDisconnected(reason: "Direct H.264 start failed: \(error.localizedDescription)", shouldScheduleReconnect: true)
+                    }
+                }
             }
         case .data(let data):
-            await handleBinary(data)
+            handleBinary(data)
         @unknown default:
             break
         }
     }
 
-    private func handleBinary(_ data: Data) async {
+    private func handleBinary(_ data: Data) {
         guard let first = data.first else { return }
         if first != 1 {
             controlMessagesReceived += 1
@@ -292,14 +296,19 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         let isKeyframe = data[data.startIndex + 1] != 0
         let payloadBytes = max(0, data.count - 2)
         let decodeGeneration = generation
-        let result = await decodeWorker.decode(data)
-        applyDecodeResult(
-            result,
-            generation: decodeGeneration,
-            headerKeyframe: isKeyframe,
-            payloadBytes: payloadBytes,
-            dataCount: data.count
-        )
+        let worker = decodeWorker
+        Task { [weak self] in
+            let result = await worker.decode(data)
+            await MainActor.run {
+                self?.applyDecodeResult(
+                    result,
+                    generation: decodeGeneration,
+                    headerKeyframe: isKeyframe,
+                    payloadBytes: payloadBytes,
+                    dataCount: data.count
+                )
+            }
+        }
     }
 
     private func applyDecodeResult(
