@@ -317,7 +317,7 @@ struct WebUISettingsPanel: View {
                 VStack(alignment: .leading, spacing: 14) {
                     DisclosureGroup("Video", isExpanded: $isVideoExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
-                            Picker("Playback", selection: $videoBackendRawValue) {
+                            Picker("App playback", selection: $videoBackendRawValue) {
                                 ForEach(VideoPlaybackBackendKind.allCases) { backend in
                                     Text(backend.displayName).tag(backend.rawValue)
                                 }
@@ -354,7 +354,7 @@ struct WebUISettingsPanel: View {
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
 
-                            Picker("Transfer", selection: bindingString(
+                            Picker("Device streamer", selection: bindingString(
                                 get: { $0.videoMode },
                                 set: { $0.videoMode = $1 },
                                 defaultValue: "webrtc"

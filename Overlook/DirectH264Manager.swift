@@ -4,6 +4,43 @@ import CoreGraphics
 import CoreVideo
 #endif
 
+private enum DirectH264DecodeResult {
+    case frame(pixelBuffer: CVPixelBuffer, isKeyframe: Bool)
+    case waitingForKeyframe
+    case control
+    case invalid(String)
+    case decodeFailed(String)
+}
+
+private actor DirectH264DecodeWorker {
+    private var parser = DirectH264Parser()
+    private let decoder = DirectH264VideoDecoder()
+
+    func reset() {
+        parser.reset()
+        decoder.reset()
+    }
+
+    func decode(_ data: Data) -> DirectH264DecodeResult {
+        let parseResult = parser.parseGLKVMBinaryMessage(data)
+        switch parseResult {
+        case .accessUnit(let accessUnit):
+            do {
+                let pixelBuffer = try decoder.decode(accessUnit)
+                return .frame(pixelBuffer: pixelBuffer, isKeyframe: accessUnit.isKeyframe)
+            } catch {
+                return .decodeFailed(String(describing: error))
+            }
+        case .waitingForKeyframe:
+            return .waitingForKeyframe
+        case .control:
+            return .control
+        case .invalid(let reason):
+            return .invalid(reason)
+        }
+    }
+}
+
 @MainActor
 final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend {
     private final class SessionDelegate: NSObject, URLSessionDelegate {
@@ -73,8 +110,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
     private var lastStatsFrames: Int64 = 0
     private var lastFrameAt: Date?
     private var h264StartSent = false
-    private var parser = DirectH264Parser()
-    private let decoder = DirectH264VideoDecoder()
+    private let decodeWorker = DirectH264DecodeWorker()
 
     func connect(to device: KVMDevice) async throws {
         try await connect(to: device, resetReconnectAttempts: true)
@@ -95,7 +131,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         isConnecting = true
         isStreamStalled = false
         lastDisconnectReason = nil
-        resetCounters()
+        await resetCounters()
 
         let client = try GLKVMClient(device: device, allowInsecureTLS: allowInsecureTLS)
         let mediaURL = try client.mediaWebsocketURL()
@@ -259,22 +295,40 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
 
         let isKeyframe = data[data.startIndex + 1] != 0
         let payloadBytes = max(0, data.count - 2)
-        let parseResult = parser.parseGLKVMBinaryMessage(data)
-        let parsedKeyframe: Bool
-        switch parseResult {
-        case .accessUnit(let accessUnit):
-            parsedKeyframe = accessUnit.isKeyframe
-            do {
-                let pixelBuffer = try decoder.decode(accessUnit)
-                currentFrame = pixelBuffer
-                videoSize = CGSize(
-                    width: CVPixelBufferGetWidth(pixelBuffer),
-                    height: CVPixelBufferGetHeight(pixelBuffer)
+        let decodeGeneration = generation
+        let worker = decodeWorker
+        Task { [weak self] in
+            let result = await worker.decode(data)
+            await MainActor.run {
+                self?.applyDecodeResult(
+                    result,
+                    generation: decodeGeneration,
+                    headerKeyframe: isKeyframe,
+                    payloadBytes: payloadBytes,
+                    dataCount: data.count
                 )
-            } catch {
-                OverlookLog.error("Direct H.264 decode failed error=\(error)")
-                return
             }
+        }
+    }
+
+    private func applyDecodeResult(
+        _ result: DirectH264DecodeResult,
+        generation: Int,
+        headerKeyframe: Bool,
+        payloadBytes: Int,
+        dataCount: Int
+    ) {
+        guard generation == self.generation else { return }
+
+        let parsedKeyframe: Bool
+        switch result {
+        case .frame(let pixelBuffer, let isKeyframe):
+            parsedKeyframe = isKeyframe
+            currentFrame = pixelBuffer
+            videoSize = CGSize(
+                width: CVPixelBufferGetWidth(pixelBuffer),
+                height: CVPixelBufferGetHeight(pixelBuffer)
+            )
         case .waitingForKeyframe:
             return
         case .control:
@@ -282,7 +336,10 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
             return
         case .invalid(let reason):
             controlMessagesReceived += 1
-            OverlookLog.error("Direct H.264 parser rejected frame reason=\(reason) bytes=\(data.count)")
+            OverlookLog.error("Direct H.264 parser rejected frame reason=\(reason) bytes=\(dataCount)")
+            return
+        case .decodeFailed(let reason):
+            OverlookLog.error("Direct H.264 decode failed error=\(reason)")
             return
         }
 
@@ -299,7 +356,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
             isConnected = true
             isConnecting = false
             hasEverConnectedToStream = true
-            OverlookLog.info("Direct H.264 first frame received keyframe=\(isKeyframe) parsedKeyframe=\(parsedKeyframe) payloadBytes=\(payloadBytes)")
+            OverlookLog.info("Direct H.264 first frame received keyframe=\(headerKeyframe) parsedKeyframe=\(parsedKeyframe) payloadBytes=\(payloadBytes)")
         }
     }
 
@@ -375,7 +432,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         }
     }
 
-    private func resetCounters() {
+    private func resetCounters() async {
         videoBytesReceived = 0
         videoFramesReceived = 0
         keyframesReceived = 0
@@ -386,8 +443,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         lastStatsFrames = 0
         lastFrameAt = nil
         h264StartSent = false
-        parser.reset()
-        decoder.reset()
+        await decodeWorker.reset()
         inboundVideoKbps = nil
         inboundFps = nil
     }

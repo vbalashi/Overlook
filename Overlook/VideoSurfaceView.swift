@@ -502,12 +502,8 @@ final class PixelBufferDisplayView: NSView {
             return
         }
 
-        if displayLayer.isReadyForMoreMediaData {
-            displayLayer.enqueue(sampleBuffer)
-        } else {
-            displayLayer.flush()
-            displayLayer.enqueue(sampleBuffer)
-        }
+        displayLayer.flush()
+        displayLayer.enqueue(sampleBuffer)
     }
 
     private func setup() {
