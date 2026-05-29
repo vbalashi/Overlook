@@ -20,13 +20,13 @@ final class AgentServerManager: ObservableObject {
     private var listener: NWListener?
     private weak var inputManager: InputManager?
     private weak var kvmDeviceManager: KVMDeviceManager?
-    private weak var webRTCManager: WebRTCManager?
+    private weak var videoFrameSource: (any VideoPlaybackFrameSource)?
     private var ocrManager: OCRManager?
 
     func setup(inputManager: InputManager, kvmDeviceManager: KVMDeviceManager, webRTCManager: WebRTCManager) {
         self.inputManager = inputManager
         self.kvmDeviceManager = kvmDeviceManager
-        self.webRTCManager = webRTCManager
+        self.videoFrameSource = webRTCManager
         self.ocrManager = OCRManager()
     }
 
@@ -741,14 +741,14 @@ final class AgentServerManager: ObservableObject {
 
     // Returns (imageData, mimeType). format: "png" | "jpeg" | "webp", quality: 0.0–1.0
     private func currentVideoFrame(timeout: TimeInterval = 1.0) async -> CVPixelBuffer? {
-        await webRTCManager?.captureCurrentFrame(timeout: timeout)
+        await videoFrameSource?.captureCurrentFrame(timeout: timeout)
     }
 
     private func frameDimensions() -> (Int, Int) {
-        if let buf = webRTCManager?.currentFrame {
+        if let buf = videoFrameSource?.currentFrame {
             return (CVPixelBufferGetWidth(buf), CVPixelBufferGetHeight(buf))
         }
-        if let size = webRTCManager?.videoSize, size.width > 0, size.height > 0 {
+        if let size = videoFrameSource?.videoSize, size.width > 0, size.height > 0 {
             return (Int(size.width), Int(size.height))
         }
         return (1920, 1080)

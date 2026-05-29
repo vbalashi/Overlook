@@ -34,6 +34,14 @@ struct VideoSurfaceView: View {
         return CGRect(x: x, y: y, width: width, height: height)
     }
 
+    private var videoStatus: any VideoPlaybackStatusProviding {
+        webRTCManager
+    }
+
+    private var videoFrameSource: any VideoPlaybackFrameSource {
+        webRTCManager
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -136,16 +144,16 @@ struct VideoSurfaceView: View {
 
                 if isShowingStatusOverlay {
                     VStack(spacing: 10) {
-                        Text(webRTCManager.isConnecting ? "Connecting…" : "Connection Lost")
+                        Text(videoStatus.isConnecting ? "Connecting…" : "Connection Lost")
                             .font(.headline)
 
-                        if let reason = webRTCManager.lastDisconnectReason, !reason.isEmpty {
+                        if let reason = videoStatus.lastDisconnectReason, !reason.isEmpty {
                             Text(reason)
                                 .font(.subheadline)
                                 .foregroundColor(.secondary)
                         }
 
-                        if let age = webRTCManager.lastVideoFrameAgeSeconds, webRTCManager.isConnecting == false {
+                        if let age = videoStatus.lastVideoFrameAgeSeconds, videoStatus.isConnecting == false {
                             Text("Last video frame: \(age)s ago")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
@@ -207,9 +215,9 @@ struct VideoSurfaceView: View {
     }
 
     private var isShowingStatusOverlay: Bool {
-        webRTCManager.isConnecting
-            || webRTCManager.isStreamStalled
-            || (webRTCManager.hasEverConnectedToStream && !webRTCManager.isConnected)
+        videoStatus.isConnecting
+            || videoStatus.isStreamStalled
+            || (videoStatus.hasEverConnectedToStream && !videoStatus.isConnected)
     }
 
     private var shouldHideCursor: Bool {
@@ -240,7 +248,7 @@ struct VideoSurfaceView: View {
         snippetDragCurrent = nil
         isSnippetModeActive = true
         inputManager.setSnippetModeActive(true)
-        webRTCManager.setFrameCaptureEnabled(true)
+        videoFrameSource.setFrameCaptureEnabled(true)
     }
 
     private func exitSnippetMode() {
@@ -253,15 +261,15 @@ struct VideoSurfaceView: View {
         snippetDragStart = nil
         snippetDragCurrent = nil
         inputManager.setSnippetModeActive(false)
-        webRTCManager.setFrameCaptureEnabled(false)
+        videoFrameSource.setFrameCaptureEnabled(false)
     }
 
     private func currentVideoSize() -> CGSize? {
-        if let size = webRTCManager.videoSize, size.width > 0, size.height > 0 {
+        if let size = videoFrameSource.videoSize, size.width > 0, size.height > 0 {
             return size
         }
 
-        guard let pixelBuffer = webRTCManager.currentFrame else {
+        guard let pixelBuffer = videoFrameSource.currentFrame else {
             return nil
         }
         let width = CVPixelBufferGetWidth(pixelBuffer)
@@ -301,7 +309,7 @@ struct VideoSurfaceView: View {
             return
         }
 
-        let frame = webRTCManager.currentFrame
+        let frame = videoFrameSource.currentFrame
 
         snippetOCRTask?.cancel()
         let requestID = UUID()

@@ -2075,6 +2075,7 @@ final class WebRTCManager: NSObject, ObservableObject {
     @Published var latency: Int = 0
     @Published var currentFrame: CVPixelBuffer?
     @Published var videoSize: CGSize?
+    @Published var sourceContentRectInVideo: CGRect?
     @Published var inboundVideoKbps: Int?
     @Published var inboundFps: Double?
     @Published var inboundVideoPlayoutDelayMs: Int?
@@ -2146,6 +2147,7 @@ final class WebRTCManager: NSObject, ObservableObject {
         lastVideoFrameAgeSeconds = nil
         latency = 0
         currentFrame = nil
+        sourceContentRectInVideo = nil
         inboundVideoKbps = nil
         inboundFps = nil
         inboundVideoPlayoutDelayMs = nil
@@ -2175,3 +2177,7 @@ final class WebRTCManager: NSObject, ObservableObject {
 }
 
 #endif
+
+extension WebRTCManager: VideoPlaybackBackend {
+    var backendKind: VideoPlaybackBackendKind { .webRTC }
+}

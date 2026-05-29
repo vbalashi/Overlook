@@ -454,3 +454,20 @@ Pending:
   selection exists.
 - Re-test stream behavior on resolution, bitrate, GOP, and streamer reset
   changes during later hardening steps.
+
+### 2026-05-29: Step 2 Backend State Abstraction
+
+Done:
+
+- Added `VideoPlaybackBackendKind`, `VideoPlaybackFrameSource`,
+  `VideoPlaybackStatusProviding`, and `VideoPlaybackBackend`.
+- Marked the existing `WebRTCManager` as the active `.webRTC` backend without
+  changing its connection behavior.
+- Moved frame/snapshot consumers in `VideoSurfaceView` and
+  `AgentServerManager` toward the backend-neutral frame-source interface.
+- Verified the app still builds in Debug.
+
+Pending:
+
+- Step 3 will add the first Direct H.264 backend implementation behind this
+  boundary.
