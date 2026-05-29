@@ -417,3 +417,21 @@ Each relevant implementation step should consider this matrix:
   video?
 - Should Auto mode be included in the first release or wait until Direct is
   proven stable on multiple firmware versions?
+
+## Progress Log
+
+### 2026-05-29: Step 1 Tooling Checkpoint
+
+Done:
+
+- Added a direct media capture tool for `/api/media/ws`.
+- Added protocol notes documenting the capture format and required real-device
+  observations.
+- Verified the capture tool help/error paths.
+- Verified the app still builds in Debug.
+
+Pending:
+
+- Run the capture tool against a real GLKVM device.
+- Fill in observed websocket framing and H.264 stream format.
+- Confirm SPS/PPS/keyframe behavior before starting parser implementation.
