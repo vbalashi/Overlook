@@ -22,6 +22,8 @@ final class AgentServerManager: ObservableObject {
     private weak var kvmDeviceManager: KVMDeviceManager?
     private weak var webRTCFrameSource: (any VideoPlaybackFrameSource)?
     private weak var directH264FrameSource: (any VideoPlaybackFrameSource)?
+    private weak var webRTCVideoStatus: (any VideoPlaybackStatusProviding)?
+    private weak var directH264VideoStatus: (any VideoPlaybackStatusProviding)?
     private var ocrManager: OCRManager?
 
     func setup(
@@ -34,6 +36,8 @@ final class AgentServerManager: ObservableObject {
         self.kvmDeviceManager = kvmDeviceManager
         self.webRTCFrameSource = webRTCManager
         self.directH264FrameSource = directH264Manager
+        self.webRTCVideoStatus = webRTCManager
+        self.directH264VideoStatus = directH264Manager
         self.ocrManager = OCRManager()
     }
 
@@ -43,6 +47,15 @@ final class AgentServerManager: ObservableObject {
             return webRTCFrameSource
         case .directH264:
             return directH264FrameSource
+        }
+    }
+
+    private var videoStatusProvider: (any VideoPlaybackStatusProviding)? {
+        switch VideoPlaybackBackendPreference.selectedKind {
+        case .webRTC:
+            return webRTCVideoStatus
+        case .directH264:
+            return directH264VideoStatus
         }
     }
 
@@ -232,6 +245,32 @@ final class AgentServerManager: ObservableObject {
             return .json([
                 "connected": kvmDeviceManager?.glkvmClient != nil,
                 "device": kvmDeviceManager?.connectedDevice?.name ?? NSNull()
+            ])
+
+        case ("GET", "/video/status"):
+            guard let status = videoStatusProvider else {
+                return .error("No video backend available", status: "503 Service Unavailable")
+            }
+            let size = status.videoSize
+            return .json([
+                "backend": status.backendKind.rawValue,
+                "backend_name": status.backendKind.displayName,
+                "connected": status.isConnected,
+                "connecting": status.isConnecting,
+                "stream_stalled": status.isStreamStalled,
+                "last_disconnect_reason": jsonOrNull(status.lastDisconnectReason),
+                "last_frame_age_seconds": jsonOrNull(status.lastVideoFrameAgeSeconds),
+                "latency_ms": status.latency,
+                "video_width": jsonOrNull(size.map { Int($0.width) }),
+                "video_height": jsonOrNull(size.map { Int($0.height) }),
+                "video_kbps": jsonOrNull(status.inboundVideoKbps),
+                "fps": jsonOrNull(status.inboundFps),
+                "playout_or_frame_age_ms": jsonOrNull(status.inboundVideoPlayoutDelayMs),
+                "jitter_or_queue_ms": jsonOrNull(status.inboundVideoJitterMs),
+                "decode_ms": jsonOrNull(status.inboundVideoDecodeMs),
+                "lost_or_pending": jsonOrNull(status.inboundVideoPacketsLost),
+                "rtt_ms": jsonOrNull(status.iceCurrentRoundTripTimeMs),
+                "session_video_bytes_received": jsonOrNull(status.sessionVideoBytesReceived)
             ])
 
         case ("POST", "/type"):
@@ -753,6 +792,11 @@ final class AgentServerManager: ObservableObject {
         if let i = value as? Int { return i }
         if let d = value as? Double { return Int(d) }
         return nil
+    }
+
+    private func jsonOrNull<T>(_ value: T?) -> Any {
+        guard let value else { return NSNull() }
+        return value
     }
 
     // Returns (imageData, mimeType). format: "png" | "jpeg" | "webp", quality: 0.0–1.0

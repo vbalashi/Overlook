@@ -111,6 +111,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
     private var lastFrameAt: Date?
     private var h264StartSent = false
     private let decodeWorker = DirectH264DecodeWorker()
+    private var pendingDecodeTasks = 0
 
     func connect(to device: KVMDevice) async throws {
         try await connect(to: device, resetReconnectAttempts: true)
@@ -296,16 +297,24 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         let isKeyframe = data[data.startIndex + 1] != 0
         let payloadBytes = max(0, data.count - 2)
         let decodeGeneration = generation
+        let receivedAt = Date()
+        pendingDecodeTasks += 1
+        inboundVideoPacketsLost = pendingDecodeTasks
         let worker = decodeWorker
         Task { [weak self] in
+            let decodeStartedAt = Date()
             let result = await worker.decode(data)
+            let decodedAt = Date()
             await MainActor.run {
                 self?.applyDecodeResult(
                     result,
                     generation: decodeGeneration,
                     headerKeyframe: isKeyframe,
                     payloadBytes: payloadBytes,
-                    dataCount: data.count
+                    dataCount: data.count,
+                    receivedAt: receivedAt,
+                    decodeStartedAt: decodeStartedAt,
+                    decodedAt: decodedAt
                 )
             }
         }
@@ -316,8 +325,13 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         generation: Int,
         headerKeyframe: Bool,
         payloadBytes: Int,
-        dataCount: Int
+        dataCount: Int,
+        receivedAt: Date,
+        decodeStartedAt: Date,
+        decodedAt: Date
     ) {
+        pendingDecodeTasks = max(0, pendingDecodeTasks - 1)
+        inboundVideoPacketsLost = pendingDecodeTasks
         guard generation == self.generation else { return }
 
         let parsedKeyframe: Bool
@@ -346,6 +360,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         videoBytesReceived += Int64(payloadBytes)
         sessionVideoBytesReceived = videoBytesReceived
         videoFramesReceived += 1
+        updateLatencyMetrics(receivedAt: receivedAt, decodeStartedAt: decodeStartedAt, decodedAt: decodedAt)
         if parsedKeyframe {
             keyframesReceived += 1
         }
@@ -446,6 +461,29 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         await decodeWorker.reset()
         inboundVideoKbps = nil
         inboundFps = nil
+        inboundVideoPlayoutDelayMs = nil
+        inboundVideoJitterMs = nil
+        inboundVideoDecodeMs = nil
+        inboundVideoPacketsLost = nil
+        latency = 0
+        pendingDecodeTasks = 0
+    }
+
+    private func updateLatencyMetrics(receivedAt: Date, decodeStartedAt: Date, decodedAt: Date) {
+        let appliedAt = Date()
+        let queueMs = max(0, Int(decodeStartedAt.timeIntervalSince(receivedAt) * 1000.0))
+        let decodeMs = max(0, Int(decodedAt.timeIntervalSince(decodeStartedAt) * 1000.0))
+        let totalMs = max(0, Int(appliedAt.timeIntervalSince(receivedAt) * 1000.0))
+
+        inboundVideoJitterMs = smoothedMetric(current: inboundVideoJitterMs, next: queueMs)
+        inboundVideoDecodeMs = smoothedMetric(current: inboundVideoDecodeMs, next: decodeMs)
+        inboundVideoPlayoutDelayMs = smoothedMetric(current: inboundVideoPlayoutDelayMs, next: totalMs)
+        latency = inboundVideoPlayoutDelayMs ?? totalMs
+    }
+
+    private func smoothedMetric(current: Int?, next: Int) -> Int {
+        guard let current else { return next }
+        return Int((Double(current) * 0.8 + Double(next) * 0.2).rounded())
     }
 
     private func shouldStartH264(from text: String) -> Bool {

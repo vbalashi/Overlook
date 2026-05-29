@@ -44,6 +44,7 @@ echo "Output: $OUT_DIR"
 echo
 
 request_json GET /status "" status
+request_json GET /video/status "" video-status-before
 request_json GET /mouse/position "" mouse-position
 request_json POST /convert/pixel-to-hid '{"x":100,"y":100}' pixel-to-hid
 
@@ -65,6 +66,7 @@ if [[ "$EXERCISE_INPUT" == "1" ]]; then
   echo
   echo "Exercising input endpoints because OVERLOOK_AGENT_EXERCISE_INPUT=1"
   request_json POST /mouse/move '{"x":0,"y":0}' mouse-move
+  request_json GET /video/status "" video-status-after-move
   request_json POST /mouse/scroll '{"deltaX":0,"deltaY":1}' mouse-scroll
   request_json POST /key '{"key":"Escape"}' key-escape
 else

@@ -1320,6 +1320,11 @@ struct ConnectionsPopoverView: View {
 
         let kbpsText = inboundVideoKbps.map { "\($0) kbps" } ?? "— kbps"
         let fpsText = inboundFps.map { "\(Int($0.rounded())) fps" } ?? "— fps"
+        let isDirectBackend = videoBackendName == VideoPlaybackBackendKind.directH264.displayName
+        let playoutLabel = isDirectBackend ? "Frame age" : "Playout"
+        let jitterLabel = isDirectBackend ? "Queue" : "Jitter"
+        let lossLabel = isDirectBackend ? "Pending" : "Lost"
+        let rttLabel = isDirectBackend ? "RTT" : "ICE RTT"
         let playoutDelayText = inboundVideoPlayoutDelayMs.map { "\($0) ms" } ?? "—"
         let jitterText = inboundVideoJitterMs.map { "\($0) ms" } ?? "—"
         let decodeText = inboundVideoDecodeMs.map { "\($0) ms" } ?? "—"
@@ -1425,7 +1430,7 @@ struct ConnectionsPopoverView: View {
                 }
 
                 HStack {
-                    Text("Playout")
+                    Text(playoutLabel)
                         .font(.caption)
                     Spacer()
                     Text(playoutDelayText)
@@ -1434,7 +1439,7 @@ struct ConnectionsPopoverView: View {
                 }
 
                 HStack {
-                    Text("Jitter")
+                    Text(jitterLabel)
                         .font(.caption)
                     Spacer()
                     Text(jitterText)
@@ -1452,7 +1457,7 @@ struct ConnectionsPopoverView: View {
                 }
 
                 HStack {
-                    Text("Lost")
+                    Text(lossLabel)
                         .font(.caption)
                     Spacer()
                     Text(lossText)
@@ -1461,7 +1466,7 @@ struct ConnectionsPopoverView: View {
                 }
 
                 HStack {
-                    Text("ICE RTT")
+                    Text(rttLabel)
                         .font(.caption)
                     Spacer()
                     Text(rttText)
