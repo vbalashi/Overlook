@@ -6,7 +6,7 @@ This plan covers the local `integrated-best-of-forks` branch.
 
 - Full Xcode installed in `/Applications/Xcode.app`.
 - `xcode-select -p` points to `/Applications/Xcode.app/Contents/Developer`.
-- App can be built with `./build.sh -c debug`.
+- App can be built.
 - A GL.iNet GLKVM / Comet-style device is reachable.
 - macOS permissions are granted when prompted:
   - Local Network
@@ -14,8 +14,6 @@ This plan covers the local `integrated-best-of-forks` branch.
   - Accessibility/Input Monitoring if required for keyboard capture
 
 ## Build Checks
-
-Run:
 
 ```bash
 ./build.sh -c debug
@@ -26,22 +24,6 @@ Expected:
 - Xcode resolves the WebRTC package.
 - Build succeeds.
 - App is copied to `build/debug/Overlook Debug.app`.
-- Duplicate build-product guardrail passes:
-
-```bash
-scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook Debug.app" --check
-```
-
-Expected: `No duplicate Overlook build products found.`
-
-Use `./build.sh -c debug` for local harness builds. Do not run raw
-`xcodebuild` for day-to-day checks; the wrapper sets the debug bundle identity,
-stamps the git commit, and cleans duplicate Spotlight/LaunchServices entries.
-If raw `xcodebuild` was run accidentally, immediately run:
-
-```bash
-scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook Debug.app"
-```
 
 If build fails, check first:
 

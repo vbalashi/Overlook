@@ -1304,6 +1304,14 @@ extension GLKVMClient {
             responseType: GLKVMResponse<GLKVMEmptyResult>.self
         )
     }
+
+    func rebootKVM() async throws {
+        _ = try await request(
+            method: "GET",
+            path: "api/upgrade/reboot",
+            responseType: GLKVMResponse<GLKVMJSONObject>.self
+        )
+    }
 }
 
 extension GLKVMClient {
@@ -1323,6 +1331,7 @@ extension GLKVMClient {
             case notConnected
             case encodingFailed
             case decodingFailed
+            case sendTimedOut(eventType: String, timeoutMs: Int)
         }
 
         nonisolated let events: AsyncStream<GLKVMWebSocketEvent>
@@ -1334,6 +1343,8 @@ extension GLKVMClient {
         private var task: URLSessionWebSocketTask?
         private var receiveTask: Task<Void, Never>?
         private var pingTask: Task<Void, Never>?
+        private let hidSendTimeoutNs: UInt64 = 750_000_000
+        private let slowHidSendThresholdMs = 250
 
         init(session: URLSession, request: URLRequest) {
             self.session = session
@@ -1348,9 +1359,12 @@ extension GLKVMClient {
 
         func connect() {
             guard task == nil else { return }
+            let url = request.url ?? URL(fileURLWithPath: "")
+            OverlookLog.info("GLKVM HID WebSocket connect start url=\(OverlookLog.redactedURL(url))")
             let ws = session.webSocketTask(with: request)
             task = ws
             ws.resume()
+            OverlookLog.info("GLKVM HID WebSocket task resumed")
 
             receiveTask = Task { [weak self] in
                 guard let self else { return }
@@ -1362,12 +1376,29 @@ extension GLKVMClient {
                 while !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     if Task.isCancelled { break }
-                    try? await self.send(eventType: "ping")
+                    do {
+                        try await self.send(eventType: "ping")
+                    } catch {
+                        await self.closeAfterFailure(reason: "ping failed", error: error)
+                        break
+                    }
                 }
             }
         }
 
         func disconnect() {
+            closeTask(reason: "disconnect")
+        }
+
+        private func closeAfterFailure(reason: String, error: Error) {
+            OverlookLog.error("GLKVM HID WebSocket closing reason=\(reason) error=\(OverlookLog.describe(error))")
+            closeTask(reason: reason)
+        }
+
+        private func closeTask(reason: String) {
+            if task != nil {
+                OverlookLog.info("GLKVM HID WebSocket close reason=\(reason)")
+            }
             receiveTask?.cancel()
             receiveTask = nil
 
@@ -1395,14 +1426,60 @@ extension GLKVMClient {
             }
 
             let text = String(decoding: data, as: UTF8.self)
-            try await task.send(.string(text))
+            let startedAt = Date()
+            do {
+                try await sendWithTimeout(task: task, message: .string(text), eventType: eventType, timeoutNs: hidSendTimeoutNs)
+            } catch {
+                OverlookLog.error("GLKVM HID WebSocket send failed event=\(eventType) durationMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(OverlookLog.describe(error))")
+                throw error
+            }
         }
 
-        private func sendBinary(_ data: Data) async throws {
+        private func sendBinary(_ data: Data, eventType: String) async throws {
             guard let task else {
                 throw WebSocketError.notConnected
             }
-            try await task.send(.data(data))
+
+            let startedAt = Date()
+            do {
+                try await sendWithTimeout(task: task, message: .data(data), eventType: eventType, timeoutNs: hidSendTimeoutNs)
+            } catch {
+                OverlookLog.error("GLKVM HID WebSocket send failed event=\(eventType) durationMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(OverlookLog.describe(error))")
+                throw error
+            }
+
+            let durationMs = Self.elapsedMilliseconds(since: startedAt)
+            if durationMs >= slowHidSendThresholdMs {
+                OverlookLog.info("GLKVM HID WebSocket slow send event=\(eventType) durationMs=\(durationMs)")
+            }
+        }
+
+        private func sendWithTimeout(task wsTask: URLSessionWebSocketTask, message: URLSessionWebSocketTask.Message, eventType: String, timeoutNs: UInt64) async throws {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try await wsTask.send(message)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: timeoutNs)
+                    throw WebSocketError.sendTimedOut(eventType: eventType, timeoutMs: Int(timeoutNs / 1_000_000))
+                }
+
+                do {
+                    try await group.next()
+                    group.cancelAll()
+                } catch {
+                    group.cancelAll()
+                    if case WebSocketError.sendTimedOut = error {
+                        OverlookLog.error("GLKVM HID WebSocket send timeout; cancelling socket event=\(eventType)")
+                        wsTask.cancel(with: .goingAway, reason: nil)
+                    }
+                    throw error
+                }
+            }
+        }
+
+        private static func elapsedMilliseconds(since date: Date) -> Int {
+            Int(Date().timeIntervalSince(date) * 1000)
         }
 
         func sendHidKey(key: String, state: Bool, finish: Bool = false) async throws {
@@ -1411,11 +1488,11 @@ extension GLKVMClient {
             payload.append(0x01)
             payload.append(state ? 0x01 : 0x00)
             payload.append(contentsOf: key.utf8)
-            try await sendBinary(payload)
+            try await sendBinary(payload, eventType: "hid.key")
 
             if finish {
                 let finishPayload = Data([0x01, 0x00])
-                try await sendBinary(finishPayload)
+                try await sendBinary(finishPayload, eventType: "hid.key.finish")
             }
         }
 
@@ -1425,7 +1502,7 @@ extension GLKVMClient {
             payload.append(0x02)
             payload.append(state ? 0x01 : 0x00)
             payload.append(contentsOf: button.utf8)
-            try await sendBinary(payload)
+            try await sendBinary(payload, eventType: "hid.mouse.button")
         }
 
         func sendHidMouseMove(toX: Int, toY: Int) async throws {
@@ -1440,7 +1517,7 @@ extension GLKVMClient {
                 UInt8((uy >> 8) & 0xFF),
                 UInt8(uy & 0xFF),
             ])
-            try await sendBinary(payload)
+            try await sendBinary(payload, eventType: "hid.mouse.move")
         }
 
         func sendHidMouseRelative(deltaX: Int, deltaY: Int, squash: Bool = false) async throws {
@@ -1452,7 +1529,7 @@ extension GLKVMClient {
                 dx,
                 dy,
             ])
-            try await sendBinary(payload)
+            try await sendBinary(payload, eventType: "hid.mouse.relative")
         }
 
         func sendHidMouseWheel(deltaX: Int, deltaY: Int, squash: Bool = false) async throws {
@@ -1464,7 +1541,7 @@ extension GLKVMClient {
                 dx,
                 dy,
             ])
-            try await sendBinary(payload)
+            try await sendBinary(payload, eventType: "hid.mouse.wheel")
         }
 
         private func receiveLoop() async {

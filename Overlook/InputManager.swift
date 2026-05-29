@@ -17,22 +17,31 @@ class InputManager: ObservableObject {
     private var keyEventMonitor: Any?
     private var mouseEventMonitor: Any?
     private var appDeactivationObserver: NSObjectProtocol?
+    private var systemSleepObservers: [NSObjectProtocol] = []
+    private var wakeReconnectTask: Task<Void, Never>?
     private var isCapturing = false
 
     private struct PendingAbsoluteMouseMove {
         let position: CGPoint
         let toX: Int
         let toY: Int
+        let timestamp: CFTimeInterval
     }
 
     private var pendingMouseMove: PendingAbsoluteMouseMove?
     private var lastSentMouseMove: PendingAbsoluteMouseMove?
     private var mouseMoveSenderTask: Task<Void, Never>?
-    private static let mouseMoveSendIntervalNs: UInt64 = 4_166_667
-    private static let defaultCommandKeyCode: UInt16 = 55
-    private static let cursorDiagnosticsDefaultsKey = "overlook.debug.cursorDiagnostics"
+    private var pendingFallbackMouseMove: PendingAbsoluteMouseMove?
+    private var fallbackMouseMoveSenderTask: Task<Void, Never>?
+    nonisolated private static let mouseMoveSendIntervalNs: UInt64 = 4_166_667
+    nonisolated private static let staleMouseMoveAgeSeconds: CFTimeInterval = 0.5
+    nonisolated private static let staleMouseButtonAgeSeconds: CFTimeInterval = 1.0
+    nonisolated private static let defaultCommandKeyCode: UInt16 = 55
+    nonisolated private static let cursorDiagnosticsDefaultsKey = "overlook.debug.cursorDiagnostics"
+    nonisolated private static let inputDiagnosticsDefaultsKey = "overlook.debug.inputDiagnostics"
 
     private var lastCursorDiagLogTime: CFTimeInterval = 0
+    private var lastInputDiagLogTime: CFTimeInterval = 0
 
     private var pendingCommandKeyCode: UInt16?
     private var activeCommandKeyCode: UInt16?
@@ -81,6 +90,7 @@ class InputManager: ObservableObject {
                 self.clearOneShotLocalShortcutState()
             }
         }
+        startSystemSleepMonitoring()
     }
 
     enum TransportMode: String, CaseIterable {
@@ -126,6 +136,7 @@ class InputManager: ObservableObject {
         let normalized = normalizePointInViewToVideo(pointInView: pointInView, viewSize: viewSize, videoSize: videoSize, sourceContentRectInVideo: sourceContentRectInVideo)
         logCursorDiagnosticsIfDue(pointInView: pointInView, viewSize: viewSize, videoSize: videoSize, sourceContentRectInVideo: sourceContentRectInVideo, normalized: normalized, layerInfo: videoViewLayerInfo)
         let moveEvent = MouseMoveEvent(position: normalized, timestamp: CACurrentMediaTime())
+        logInputDiagnosticsIfDue(event: moveEvent)
         if transportMode == .glkvmWebSocket {
             if glkvmWebSocketClient != nil {
                 enqueueMouseMoveEvent(moveEvent)
@@ -151,10 +162,21 @@ class InputManager: ObservableObject {
         OverlookLog.info("cursor-diag view=\(Int(viewSize.width))x\(Int(viewSize.height)) video=\(videoStr) src=\(srcStr) point=(\(String(format: "%.1f", pointInView.x)),\(String(format: "%.1f", pointInView.y))) norm=(\(String(format: "%.4f", normalized.x)),\(String(format: "%.4f", normalized.y))) sent=(\(toX),\(toY)) layer=\(layer)")
     }
 
+    private func logInputDiagnosticsIfDue(event: MouseMoveEvent) {
+        guard UserDefaults.standard.bool(forKey: Self.inputDiagnosticsDefaultsKey) else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastInputDiagLogTime >= 0.5 else { return }
+        lastInputDiagLogTime = now
+        let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
+        let pendingAgeMs = pendingMouseMove.map { Int((now - $0.timestamp) * 1000) } ?? -1
+        let fallbackPendingAgeMs = pendingFallbackMouseMove.map { Int((now - $0.timestamp) * 1000) } ?? -1
+        OverlookLog.info("input-diag local mouse transport=\(self.transportMode.rawValue) wsPresent=\(self.glkvmWebSocketClient != nil) pendingAgeMs=\(pendingAgeMs) fallbackPendingAgeMs=\(fallbackPendingAgeMs) sent=(\(toX),\(toY))")
+    }
+
     private func enqueueMouseMoveEvent(_ event: MouseMoveEvent) {
         guard isNormalized(event.position) else { return }
         let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
-        pendingMouseMove = PendingAbsoluteMouseMove(position: event.position, toX: toX, toY: toY)
+        pendingMouseMove = PendingAbsoluteMouseMove(position: event.position, toX: toX, toY: toY, timestamp: event.timestamp)
         if mouseMoveSenderTask == nil {
             startMouseMoveSender()
         }
@@ -183,6 +205,10 @@ class InputManager: ObservableObject {
                 }
 
                 if snapshot.mode == .glkvmWebSocket, let ws = snapshot.ws {
+                    guard CACurrentMediaTime() - move.timestamp <= Self.staleMouseMoveAgeSeconds else {
+                        OverlookLog.info("Dropping stale GLKVM HID mouse move ageMs=\(Int((CACurrentMediaTime() - move.timestamp) * 1000))")
+                        continue
+                    }
                     let shouldSend = await MainActor.run {
                         if self.lastSentMouseMove?.toX == move.toX, self.lastSentMouseMove?.toY == move.toY {
                             return false
@@ -192,6 +218,10 @@ class InputManager: ObservableObject {
                     }
                     guard shouldSend else { continue }
                     do {
+                        let queuedAgeMs = Int((CACurrentMediaTime() - move.timestamp) * 1000)
+                        if queuedAgeMs >= 100, UserDefaults.standard.bool(forKey: Self.inputDiagnosticsDefaultsKey) {
+                            OverlookLog.info("input-diag sending queued GLKVM HID mouse move ageMs=\(queuedAgeMs)")
+                        }
                         try await ws.sendHidMouseMove(toX: move.toX, toY: move.toY)
                         await MainActor.run {
                             self.lastMouseX = move.toX
@@ -199,6 +229,7 @@ class InputManager: ObservableObject {
                         }
                     } catch {
                         await MainActor.run {
+                            self.resetGLKVMWebSocketAfterFailure()
                             self.sendFallbackMouseMoveEvent(MouseMoveEvent(position: move.position, timestamp: CACurrentMediaTime()))
                         }
                     }
@@ -218,6 +249,9 @@ class InputManager: ObservableObject {
         lastSentMouseMove = nil
         mouseMoveSenderTask?.cancel()
         mouseMoveSenderTask = nil
+        pendingFallbackMouseMove = nil
+        fallbackMouseMoveSenderTask?.cancel()
+        fallbackMouseMoveSenderTask = nil
     }
 
     func handleVideoMouseButton(button: MouseButton, isDown: Bool, pointInView: CGPoint, viewSize: CGSize, videoSize: CGSize?, sourceContentRectInVideo: CGRect? = nil) {
@@ -252,6 +286,90 @@ class InputManager: ObservableObject {
         glkvmWebSocketClient = nil
         Task {
             await ws?.disconnect()
+        }
+    }
+
+    private func resetGLKVMWebSocketAfterFailure() {
+        guard glkvmWebSocketClient != nil else { return }
+        OverlookLog.error("GLKVM HID WebSocket send failed; resetting connection")
+        disconnectGLKVMWebSocket()
+        Task { [weak self] in
+            await self?.reconnectGLKVMWebSocketIfNeeded()
+        }
+    }
+
+    private func handleGLKVMWebSocketLost(reason: String) {
+        guard glkvmWebSocketClient != nil else { return }
+        OverlookLog.error("GLKVM HID WebSocket lost reason=\(reason); resetting connection")
+        disconnectGLKVMWebSocket()
+        Task { [weak self] in
+            await self?.reconnectGLKVMWebSocketIfNeeded()
+        }
+    }
+
+    private func startSystemSleepMonitoring() {
+        guard systemSleepObservers.isEmpty else { return }
+
+        let center = NSWorkspace.shared.notificationCenter
+        let mainQueue = OperationQueue.main
+
+        systemSleepObservers.append(center.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: mainQueue
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleSystemWillSleep()
+            }
+        })
+
+        systemSleepObservers.append(center.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: mainQueue
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleSystemDidWake(reason: "system wake")
+            }
+        })
+
+        systemSleepObservers.append(center.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: mainQueue
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.handleSystemDidWake(reason: "display wake")
+            }
+        })
+    }
+
+    private func handleSystemWillSleep() {
+        wakeReconnectTask?.cancel()
+        wakeReconnectTask = nil
+
+        guard glkvmClient != nil else { return }
+        OverlookLog.info("System will sleep; closing GLKVM HID WebSocket for wake recovery")
+        releaseTrackedRemoteModifiersForCaptureStop()
+        clearOneShotLocalShortcutState()
+        disconnectGLKVMWebSocket()
+    }
+
+    private func handleSystemDidWake(reason: String) {
+        guard transportMode == .glkvmWebSocket, glkvmClient != nil else { return }
+
+        wakeReconnectTask?.cancel()
+        OverlookLog.info("GLKVM HID WebSocket wake reconnect scheduled reason=\(reason) delaySeconds=2.0")
+
+        wakeReconnectTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.wakeReconnectTask = nil
+                Task { [weak self] in
+                    await self?.reconnectGLKVMWebSocketIfNeeded()
+                }
+            }
         }
     }
     
@@ -394,9 +512,17 @@ class InputManager: ObservableObject {
                 remotePressedModifierKeyCodes.insert(pending)
                 locallySuppressedModifierKeyCodes.remove(pending)
 
-                Task {
-                    try? await ws.sendHidKey(key: metaKey, state: true)
-                    try? await ws.sendHidKey(key: keyName, state: true)
+                Task { @MainActor in
+                    do {
+                        try await ws.sendHidKey(key: metaKey, state: true)
+                        try await ws.sendHidKey(key: keyName, state: true)
+                    } catch {
+                        self.resetGLKVMWebSocketAfterFailure()
+                        if let client = self.glkvmClient {
+                            try? await client.sendHidKey(key: metaKey, state: true)
+                            try? await client.sendHidKey(key: keyName, state: true)
+                        }
+                    }
                 }
                 return nil
             }
@@ -772,9 +898,20 @@ class InputManager: ObservableObject {
         if transportMode == .glkvmWebSocket,
            let key = glkvmKeyForMacKeyCode(event.keyCode),
            let ws = glkvmWebSocketClient {
-            Task {
-                try? await ws.sendHidKey(key: key, state: event.isKeyDown)
+            Task { @MainActor in
+                do {
+                    try await ws.sendHidKey(key: key, state: event.isKeyDown)
+                } catch {
+                    self.resetGLKVMWebSocketAfterFailure()
+                    self.sendFallbackKeyEvent(event, key: key)
+                }
             }
+            return
+        }
+
+        if transportMode == .glkvmWebSocket,
+           let key = glkvmKeyForMacKeyCode(event.keyCode) {
+            sendFallbackKeyEvent(event, key: key)
             return
         }
 
@@ -790,6 +927,38 @@ class InputManager: ObservableObject {
         
         webRTCManager?.sendInputEvent(inputEvent)
     }
+
+    private func sendFallbackKeyEvent(_ event: KeyEvent, key: String) {
+        if transportMode == .glkvmWebSocket,
+           let client = glkvmClient {
+            Task {
+                do {
+                    try await client.sendHidKey(key: key, state: event.isKeyDown)
+                } catch {
+                    await MainActor.run {
+                        self.sendWebRTCKeyEvent(event)
+                    }
+                }
+            }
+            return
+        }
+
+        sendWebRTCKeyEvent(event)
+    }
+
+    private func sendWebRTCKeyEvent(_ event: KeyEvent) {
+        let inputEvent = InputEvent(
+            type: "keyboard",
+            data: [
+                "keyCode": .int(Int(event.keyCode)),
+                "isKeyDown": .bool(event.isKeyDown),
+                "modifiers": .int(Int(event.modifiers.rawValue)),
+                "timestamp": .double(event.timestamp)
+            ]
+        )
+
+        webRTCManager?.sendInputEvent(inputEvent)
+    }
     
     private func sendMouseButtonEvent(_ event: MouseButtonEvent) {
         if transportMode == .glkvmWebSocket,
@@ -797,6 +966,10 @@ class InputManager: ObservableObject {
            isNormalized(event.position),
            let ws = glkvmWebSocketClient {
             Task { @MainActor in
+                guard CACurrentMediaTime() - event.timestamp <= Self.staleMouseButtonAgeSeconds else {
+                    OverlookLog.info("Dropping stale GLKVM HID mouse button ageMs=\(Int((CACurrentMediaTime() - event.timestamp) * 1000))")
+                    return
+                }
                 let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
                 do {
                     try await ws.sendHidMouseMove(toX: toX, toY: toY)
@@ -804,6 +977,7 @@ class InputManager: ObservableObject {
                     self.lastMouseX = toX
                     self.lastMouseY = toY
                 } catch {
+                    self.resetGLKVMWebSocketAfterFailure()
                     self.sendFallbackMouseButtonEvent(event)
                 }
             }
@@ -832,11 +1006,16 @@ class InputManager: ObservableObject {
         if transportMode == .glkvmWebSocket, isNormalized(event.position), let ws = glkvmWebSocketClient {
             let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
             Task { @MainActor in
+                guard CACurrentMediaTime() - event.timestamp <= Self.staleMouseMoveAgeSeconds else {
+                    OverlookLog.info("Dropping stale GLKVM HID direct mouse move ageMs=\(Int((CACurrentMediaTime() - event.timestamp) * 1000))")
+                    return
+                }
                 do {
                     try await ws.sendHidMouseMove(toX: toX, toY: toY)
                     self.lastMouseX = toX
                     self.lastMouseY = toY
                 } catch {
+                    self.resetGLKVMWebSocketAfterFailure()
                     self.sendFallbackMouseMoveEvent(event)
                 }
             }
@@ -873,6 +1052,7 @@ class InputManager: ObservableObject {
                     try await ws.sendHidMouseWheel(deltaX: steps.dx, deltaY: steps.dy)
                 } catch {
                     await MainActor.run {
+                        self.resetGLKVMWebSocketAfterFailure()
                         self.sendFallbackMouseScrollSteps(steps, originalEvent: event)
                     }
                 }
@@ -888,6 +1068,10 @@ class InputManager: ObservableObject {
            let button = glkvmMouseButtonName(event.button),
            isNormalized(event.position) {
             Task { @MainActor in
+                guard CACurrentMediaTime() - event.timestamp <= Self.staleMouseButtonAgeSeconds else {
+                    OverlookLog.info("Dropping stale GLKVM fallback mouse button ageMs=\(Int((CACurrentMediaTime() - event.timestamp) * 1000))")
+                    return
+                }
                 let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
                 do {
                     try await client.sendHidMouseMove(toX: toX, toY: toY)
@@ -908,20 +1092,43 @@ class InputManager: ObservableObject {
         if transportMode == .glkvmWebSocket,
            let client = glkvmClient,
            isNormalized(event.position) {
-            Task { @MainActor in
-                let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
-                do {
-                    try await client.sendHidMouseMove(toX: toX, toY: toY)
-                    self.lastMouseX = toX
-                    self.lastMouseY = toY
-                } catch {
-                    self.sendWebRTCMouseMoveEvent(event)
-                }
-            }
+            enqueueFallbackMouseMoveEvent(event, client: client)
             return
         }
 
         sendWebRTCMouseMoveEvent(event)
+    }
+
+    private func enqueueFallbackMouseMoveEvent(_ event: MouseMoveEvent, client: GLKVMClient) {
+        let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
+        pendingFallbackMouseMove = PendingAbsoluteMouseMove(position: event.position, toX: toX, toY: toY, timestamp: event.timestamp)
+
+        guard fallbackMouseMoveSenderTask == nil else { return }
+
+        fallbackMouseMoveSenderTask = Task { @MainActor in
+            while !Task.isCancelled {
+                guard let move = pendingFallbackMouseMove else {
+                    fallbackMouseMoveSenderTask = nil
+                    return
+                }
+                pendingFallbackMouseMove = nil
+
+                guard CACurrentMediaTime() - move.timestamp <= Self.staleMouseMoveAgeSeconds else {
+                    OverlookLog.info("Dropping stale GLKVM fallback mouse move ageMs=\(Int((CACurrentMediaTime() - move.timestamp) * 1000))")
+                    continue
+                }
+
+                do {
+                    try await client.sendHidMouseMove(toX: move.toX, toY: move.toY)
+                    lastMouseX = move.toX
+                    lastMouseY = move.toY
+                } catch {
+                    sendWebRTCMouseMoveEvent(MouseMoveEvent(position: move.position, timestamp: move.timestamp))
+                }
+
+                try? await Task.sleep(nanoseconds: Self.mouseMoveSendIntervalNs)
+            }
+        }
     }
 
     private func consumeGLKVMScrollSteps(_ event: MouseScrollEvent) -> (dx: Int, dy: Int)? {
@@ -1065,6 +1272,9 @@ class InputManager: ObservableObject {
     }
     
     deinit {
+        wakeReconnectTask?.cancel()
+        wakeReconnectTask = nil
+
         if let monitor = keyEventMonitor {
             NSEvent.removeMonitor(monitor)
             keyEventMonitor = nil
@@ -1079,6 +1289,11 @@ class InputManager: ObservableObject {
             NotificationCenter.default.removeObserver(observer)
             appDeactivationObserver = nil
         }
+
+        for observer in systemSleepObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        systemSleepObservers.removeAll()
     }
 
     private func reconnectGLKVMWebSocketIfNeeded() async {
@@ -1090,9 +1305,17 @@ class InputManager: ObservableObject {
         }
 
         if glkvmWebSocketClient == nil {
-            let ws = try? client.makeWebSocketClient(stream: false)
+            OverlookLog.info("GLKVM HID WebSocket reconnect start")
+            let ws: GLKVMClient.WebSocketClient
+            do {
+                ws = try client.makeWebSocketClient(stream: false)
+            } catch {
+                OverlookLog.error("GLKVM HID WebSocket reconnect failed to create client error=\(OverlookLog.describe(error))")
+                return
+            }
             glkvmWebSocketClient = ws
-            await ws?.connect()
+            await ws.connect()
+            OverlookLog.info("GLKVM HID WebSocket reconnect issued")
         }
     }
 

@@ -36,37 +36,17 @@ The goal is not to rewrite Overlook, but to collect the most practical fork impr
 
 ## Local builds
 
-Use the build wrapper for all local debug/release builds:
-
 ```bash
 ./build.sh -c debug
 ```
 
-The wrapper is the canonical local build entrypoint. It copies the runnable app to `build/debug/Overlook Debug.app` and removes duplicate build products from Xcode DerivedData so Spotlight and LaunchServices see a single local debug app bundle.
-It also stamps the app bundle with the current git commit, so Settings → About can show exactly which source revision produced the build.
-
-Use debug builds for day-to-day development and local testing. Debug builds are deliberately named `Overlook Debug.app` and use bundle id `com.overlook.app.debug`, so they do not collide with release builds in Spotlight, LaunchServices, Dock recents, or macOS app identity caches.
-
-Use release builds only when preparing a stable build from a committed source state:
+Debug builds are copied to `build/debug/Overlook Debug.app`.
 
 ```bash
 ./build.sh -c release
 ```
 
-Release builds are named `Overlook.app`, use bundle id `com.overlook.app`, and are copied to `build/release/Overlook.app`.
-
-Avoid raw `xcodebuild` for day-to-day local builds. If it was run accidentally,
-clean duplicate build products afterwards:
-
-```bash
-scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook Debug.app"
-```
-
-To check the guardrail without deleting anything:
-
-```bash
-scripts/cleanup-overlook-build-products.sh --keep "$PWD/build/debug/Overlook Debug.app" --check
-```
+Release builds are copied to `build/release/Overlook.app`.
 
 ## Versioning
 
@@ -75,7 +55,7 @@ Overlook uses two app-bundle version fields:
 - `MARKETING_VERSION`: the human release version, using SemVer such as `1.0.0`.
 - `CURRENT_PROJECT_VERSION`: the monotonically increasing build number.
 
-The built app shows these values in Settings → About and in the standard macOS About panel. Builds made through `./build.sh` also include the current short git commit hash; if the working tree has local changes, the commit is shown with a `-dirty` suffix.
+The built app shows these values in Settings → About and in the standard macOS About panel.
 
 To prepare a release version:
 

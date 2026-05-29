@@ -30,6 +30,7 @@ struct WebUISettingsPanel: View {
     @State private var isLoadingNetwork = false
     @State private var isApplyingStreamer = false
     @State private var isApplyingEdid = false
+    @State private var isRebootingKVM = false
     @State private var errorMessage: String?
 
     private struct ErrorEntry: Identifiable, Hashable {
@@ -40,6 +41,7 @@ struct WebUISettingsPanel: View {
 
     @State private var errorHistory: [ErrorEntry] = []
     @State private var showingErrorHistory: Bool = false
+    @State private var showingRebootConfirmation: Bool = false
 
     @State private var isVideoExpanded = true
     @State private var isRemoteExpanded = true
@@ -802,10 +804,15 @@ struct WebUISettingsPanel: View {
 
                     DisclosureGroup("Advanced", isExpanded: $isAdvancedExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
-                            Button("Reset KVM") {
+                            Button("Reset Stream + HID") {
                                 Task { await resetKVM() }
                             }
                             .disabled(kvmDeviceManager.glkvmClient == nil)
+
+                            Button("Reboot KVM…") {
+                                showingRebootConfirmation = true
+                            }
+                            .disabled(kvmDeviceManager.glkvmClient == nil || isRebootingKVM)
                         }
                         .padding(.top, 6)
                     }
@@ -859,6 +866,18 @@ struct WebUISettingsPanel: View {
         .background(panelBackground)
         .sheet(isPresented: $showingErrorHistory) {
             ErrorHistorySheet(entries: errorHistory)
+        }
+        .confirmationDialog(
+            "Reboot KVM?",
+            isPresented: $showingRebootConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Reboot KVM", role: .destructive) {
+                Task { await rebootKVM() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will restart the GLKVM device and temporarily disconnect the stream.")
         }
         .task(id: isPresented) {
             guard isPresented else { return }
@@ -1467,6 +1486,19 @@ struct WebUISettingsPanel: View {
                 recordError("Failed to reset: \(error)")
             }
         }
+    }
+
+    private func rebootKVM() async {
+        guard let client = kvmDeviceManager.glkvmClient else { return }
+        isRebootingKVM = true
+        do {
+            try await client.rebootKVM()
+        } catch {
+            await MainActor.run {
+                recordError("Failed to reboot KVM: \(error)")
+            }
+        }
+        isRebootingKVM = false
     }
 
     private func bindingString(

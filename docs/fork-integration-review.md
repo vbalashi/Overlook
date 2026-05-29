@@ -109,7 +109,7 @@ Low-risk areas:
 
 Must do before trusting the build:
 
-- Install full Xcode and run `./build.sh -c debug`.
+- Install full Xcode and make a debug build.
 - Fix any semantic compile errors that `swiftc -parse` cannot catch.
 - Launch the app and connect to a real GLKVM / Comet device.
 - Run the manual smoke checklist in `docs/test-plan.md`.

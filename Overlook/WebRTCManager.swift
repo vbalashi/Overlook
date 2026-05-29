@@ -143,6 +143,8 @@ class WebRTCManager: NSObject, ObservableObject {
     private var autoReconnectTask: Task<Void, Never>?
     private var autoReconnectAttempt: Int = 0
     private var autoReconnectGeneration: Int = 0
+    private var videoDisconnectedReconnectTask: Task<Void, Never>?
+    private var videoDisconnectedReconnectGeneration: Int = 0
     private var wakeReconnectTask: Task<Void, Never>?
     private var systemSleepObservers: [NSObjectProtocol] = []
     private var isSystemSleeping = false
@@ -177,6 +179,7 @@ class WebRTCManager: NSObject, ObservableObject {
 
     private let streamStallThresholdSeconds: CFTimeInterval = 15.0
     private let initialFrameTimeoutSeconds: CFTimeInterval = 5.0
+    private let videoDisconnectedGracePeriodSeconds: TimeInterval = 4.0
     
     private let allowInsecureTLS = true
     private var signalingSession: URLSession?
@@ -601,6 +604,7 @@ class WebRTCManager: NSObject, ObservableObject {
         guard isSystemSleeping == false else { return }
         guard isAutoReconnectInProgress == false else { return }
 
+        cancelVideoDisconnectedReconnect()
         autoReconnectTask?.cancel()
         autoReconnectAttempt += 1
         autoReconnectGeneration += 1
@@ -635,6 +639,39 @@ class WebRTCManager: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    private func scheduleVideoDisconnectedReconnect() {
+        guard videoDisconnectedReconnectTask == nil else { return }
+        guard isSystemSleeping == false else { return }
+
+        videoDisconnectedReconnectGeneration += 1
+        let generation = videoDisconnectedReconnectGeneration
+        let delay = videoDisconnectedGracePeriodSeconds
+
+        lastDisconnectReason = "Video connection lost. Waiting for recovery…"
+        OverlookLog.info("WebRTC video disconnected grace period started delaySeconds=\(String(format: "%.1f", delay))")
+
+        videoDisconnectedReconnectTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                guard generation == self.videoDisconnectedReconnectGeneration else { return }
+
+                self.videoDisconnectedReconnectTask = nil
+                guard self.isConnected == false else { return }
+
+                self.lastDisconnectReason = "Video connection lost"
+                self.scheduleAutoReconnect(reason: "Video connection lost")
+            }
+        }
+    }
+
+    private func cancelVideoDisconnectedReconnect() {
+        videoDisconnectedReconnectGeneration += 1
+        videoDisconnectedReconnectTask?.cancel()
+        videoDisconnectedReconnectTask = nil
     }
 
     func setFrameCaptureEnabled(_ enabled: Bool) {
@@ -1766,6 +1803,7 @@ extension WebRTCManager: @preconcurrency RTCPeerConnectionDelegate {
 
             isConnected = (stateChanged == .connected || stateChanged == .completed)
             if isConnected {
+                cancelVideoDisconnectedReconnect()
                 isConnecting = false
                 hasEverConnectedToStream = true
                 connectedIceTime = CACurrentMediaTime()
@@ -1775,14 +1813,15 @@ extension WebRTCManager: @preconcurrency RTCPeerConnectionDelegate {
             } else {
                 stopLetterboxDetectionTask()
                 if stateChanged == .disconnected {
-                    lastDisconnectReason = "Video connection lost"
                     isConnecting = false
-                    scheduleAutoReconnect(reason: "Video connection lost")
+                    scheduleVideoDisconnectedReconnect()
                 } else if stateChanged == .failed {
+                    cancelVideoDisconnectedReconnect()
                     lastDisconnectReason = "Video connection failed"
                     isConnecting = false
                     scheduleAutoReconnect(reason: "Video connection failed")
                 } else if stateChanged == .closed {
+                    cancelVideoDisconnectedReconnect()
                     lastDisconnectReason = "Video connection closed"
                     isConnecting = false
                 }
