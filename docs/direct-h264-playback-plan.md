@@ -506,3 +506,24 @@ Done:
 Pending:
 
 - Step 5 will convert parser output into VideoToolbox decode input.
+
+### 2026-05-29: Step 5 VideoToolbox Decoder
+
+Done:
+
+- Added `DirectH264VideoDecoder`.
+- Builds `CMVideoFormatDescription` from parser-provided SPS/PPS.
+- Recreates `VTDecompressionSession` when parameter sets change.
+- Converts Annex B access units to length-prefixed samples for VideoToolbox.
+- Decodes Direct access units to `CVPixelBuffer`.
+- Integrated decoder output into `DirectH264Manager` state (`currentFrame` and
+  `videoSize`) while keeping Direct out of the visible UI path.
+- Added `scripts/test-direct-h264-decoder.swift` for external `.ovdm` capture
+  smoke tests.
+- Verified decoder smoke against the real-device capture:
+  `252` decoded frames, `5` keyframes, final size `1920x1080`.
+- Verified Debug build.
+
+Pending:
+
+- Step 6 will add the native render surface and visible Direct playback path.

@@ -68,6 +68,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
     private var lastFrameAt: Date?
     private var h264StartSent = false
     private var parser = DirectH264Parser()
+    private let decoder = DirectH264VideoDecoder()
 
     func connect(to device: KVMDevice) async throws {
         disconnect()
@@ -232,6 +233,17 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         switch parseResult {
         case .accessUnit(let accessUnit):
             parsedKeyframe = accessUnit.isKeyframe
+            do {
+                let pixelBuffer = try decoder.decode(accessUnit)
+                currentFrame = pixelBuffer
+                videoSize = CGSize(
+                    width: CVPixelBufferGetWidth(pixelBuffer),
+                    height: CVPixelBufferGetHeight(pixelBuffer)
+                )
+            } catch {
+                OverlookLog.error("Direct H.264 decode failed error=\(error)")
+                return
+            }
         case .waitingForKeyframe:
             return
         case .control:
@@ -319,6 +331,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         lastFrameAt = nil
         h264StartSent = false
         parser.reset()
+        decoder.reset()
         inboundVideoKbps = nil
         inboundFps = nil
     }
