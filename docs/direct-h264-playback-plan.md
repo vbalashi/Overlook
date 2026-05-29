@@ -489,3 +489,20 @@ Pending:
 - Wire backend selection into the app in a later step.
 - Step 4 will add a real H.264 parser; the current Direct backend only counts
   frames and bytes.
+
+### 2026-05-29: Step 4 H.264 Parser
+
+Done:
+
+- Added `DirectH264Parser` for the confirmed GLKVM binary message format.
+- Added Annex B NAL scanning with SPS, PPS, IDR, and non-IDR detection.
+- Added sync behavior: drop delta frames until a keyframe with parameter sets is
+  observed; retain latest SPS/PPS for later access units.
+- Integrated parser validation into `DirectH264Manager` so Direct counters only
+  advance on parser-accepted access units.
+- Added `scripts/test-direct-h264-parser.swift` with synthetic parser coverage.
+- Verified parser tests and Debug build.
+
+Pending:
+
+- Step 5 will convert parser output into VideoToolbox decode input.

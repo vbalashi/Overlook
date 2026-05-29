@@ -67,6 +67,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
     private var lastStatsFrames: Int64 = 0
     private var lastFrameAt: Date?
     private var h264StartSent = false
+    private var parser = DirectH264Parser()
 
     func connect(to device: KVMDevice) async throws {
         disconnect()
@@ -226,11 +227,26 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
 
         let isKeyframe = data[data.startIndex + 1] != 0
         let payloadBytes = max(0, data.count - 2)
+        let parseResult = parser.parseGLKVMBinaryMessage(data)
+        let parsedKeyframe: Bool
+        switch parseResult {
+        case .accessUnit(let accessUnit):
+            parsedKeyframe = accessUnit.isKeyframe
+        case .waitingForKeyframe:
+            return
+        case .control:
+            controlMessagesReceived += 1
+            return
+        case .invalid(let reason):
+            controlMessagesReceived += 1
+            OverlookLog.error("Direct H.264 parser rejected frame reason=\(reason) bytes=\(data.count)")
+            return
+        }
 
         videoBytesReceived += Int64(payloadBytes)
         sessionVideoBytesReceived = videoBytesReceived
         videoFramesReceived += 1
-        if isKeyframe {
+        if parsedKeyframe {
             keyframesReceived += 1
         }
         lastFrameAt = Date()
@@ -240,7 +256,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
             isConnected = true
             isConnecting = false
             hasEverConnectedToStream = true
-            OverlookLog.info("Direct H.264 first frame received keyframe=\(isKeyframe) payloadBytes=\(payloadBytes)")
+            OverlookLog.info("Direct H.264 first frame received keyframe=\(isKeyframe) parsedKeyframe=\(parsedKeyframe) payloadBytes=\(payloadBytes)")
         }
     }
 
@@ -302,6 +318,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         lastStatsFrames = 0
         lastFrameAt = nil
         h264StartSent = false
+        parser.reset()
         inboundVideoKbps = nil
         inboundFps = nil
     }
