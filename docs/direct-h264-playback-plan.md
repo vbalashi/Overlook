@@ -408,10 +408,8 @@ Each relevant implementation step should consider this matrix:
 
 ## Open Questions
 
-- What exact framing does `/api/media/ws` use?
-- Does the stream include timestamps, or do we derive frame timing locally?
-- Does the endpoint emit SPS/PPS on connect and after resolution changes?
-- Does the endpoint carry only video, or mixed control/media messages?
+- Does the same `/api/media/ws` framing hold across all supported firmware
+  versions?
 - Is Direct media available on all supported firmware versions?
 - Can audio WebRTC run concurrently with Direct video without requesting Janus
   video?
@@ -432,6 +430,27 @@ Done:
 
 Pending:
 
-- Run the capture tool against a real GLKVM device.
-- Fill in observed websocket framing and H.264 stream format.
-- Confirm SPS/PPS/keyframe behavior before starting parser implementation.
+- Run a production-length Direct session after the app backend exists.
+
+### 2026-05-29: Step 1 Real-Device Capture
+
+Done:
+
+- Confirmed SSH access to the GLKVM host through the local `glkvm` SSH alias.
+- Captured `/api/media/ws` from the real device using the saved Overlook auth
+  token without exposing it in command-line arguments.
+- Confirmed the Direct stream sends metadata first, then starts H.264 after the
+  WebUI-compatible start message.
+- Confirmed binary video messages carry one Annex B H.264 access unit with a
+  two-byte GLKVM frame header.
+- Confirmed keyframes include SPS, PPS, and IDR, with SPS/PPS repeated on later
+  keyframes.
+- Documented the WebUI heartbeat behavior and updated the capture tool to send
+  the same heartbeat by default.
+
+Pending:
+
+- Verify Direct video and WebRTC audio can run concurrently once the app backend
+  selection exists.
+- Re-test stream behavior on resolution, bitrate, GOP, and streamer reset
+  changes during later hardening steps.

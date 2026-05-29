@@ -7,9 +7,13 @@ private struct Arguments {
     var user: String = "admin"
     var password: String?
     var token: String?
+    var tokenFile: String?
+    var tokenEnv: String?
     var duration: TimeInterval = 10
     var output: String?
     var allowInsecureTLS: Bool = true
+    var autoStartH264: Bool = true
+    var autoHeartbeat: Bool = true
 }
 
 private enum CaptureError: Error, CustomStringConvertible {
@@ -61,6 +65,11 @@ private final class SessionDelegate: NSObject, URLSessionDelegate {
     }
 }
 
+private func log(_ message: String) {
+    print(message)
+    fflush(stdout)
+}
+
 private func usage() -> String {
     """
     Usage:
@@ -70,17 +79,22 @@ private func usage() -> String {
       --host <host>         GLKVM host or IP. Required.
       --port <port>         Device port. Default: 443.
       --token <token>       Existing auth_token cookie value.
+      --token-file <path>   Read auth_token from a local file.
+      --token-env <name>    Read auth_token from an environment variable.
       --password <password> Login password. Used only when --token is omitted.
       --user <user>         Login user for --password. Default: admin.
       --duration <seconds>  Capture duration. Default: 10.
       --output <path>       Capture output path. Default: ../diagnostics/direct-media-captures/<timestamp>.ovdm.
       --strict-tls          Do not allow self-signed device certificates.
+      --no-start            Do not auto-send the H.264 start message after media metadata.
+      --no-heartbeat        Do not send the WebUI-style binary heartbeat.
       --help                Show this help.
 
     Output:
       The .ovdm file stores websocket message boundaries:
         magic "OVDM1\\n", then repeated records:
-        1 byte type (1=binary, 2=text), 8 byte big-endian payload length, payload bytes.
+        1 byte type, 8 byte big-endian payload length, payload bytes.
+        Types: 1=inbound binary, 2=inbound text, 3=outbound text.
 
       A .jsonl sidecar is written next to the capture with redacted per-message metadata.
     """
@@ -120,6 +134,12 @@ private func parseArguments(_ raw: [String]) throws -> Arguments {
         case "--token":
             args.token = try requireValue(after: arg)
             index += 2
+        case "--token-file":
+            args.tokenFile = try requireValue(after: arg)
+            index += 2
+        case "--token-env":
+            args.tokenEnv = try requireValue(after: arg)
+            index += 2
         case "--duration":
             let value = try requireValue(after: arg)
             guard let duration = TimeInterval(value), duration > 0 else {
@@ -132,6 +152,12 @@ private func parseArguments(_ raw: [String]) throws -> Arguments {
             index += 2
         case "--strict-tls":
             args.allowInsecureTLS = false
+            index += 1
+        case "--no-start":
+            args.autoStartH264 = false
+            index += 1
+        case "--no-heartbeat":
+            args.autoHeartbeat = false
             index += 1
         case "--help", "-h":
             print(usage())
@@ -265,6 +291,57 @@ private func sidecarLine(index: Int, type: String, payload: Data, elapsed: TimeI
     return (String(data: data, encoding: .utf8) ?? "{}") + "\n"
 }
 
+private func recordMessage(
+    index: inout Int,
+    recordType: UInt8,
+    sidecarType: String,
+    payload: Data,
+    elapsed: TimeInterval,
+    capture: inout Data,
+    sidecar: inout Data
+) {
+    index += 1
+    appendRecordHeader(type: recordType, length: payload.count, to: &capture)
+    capture.append(payload)
+    sidecar.append(Data(sidecarLine(index: index, type: sidecarType, payload: payload, elapsed: elapsed).utf8))
+}
+
+private func shouldStartH264(from text: String) -> Bool {
+    guard let data = text.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let eventType = object["event_type"] as? String,
+          eventType == "media",
+          let event = object["event"] as? [String: Any],
+          let video = event["video"] as? [String: Any] else {
+        return false
+    }
+    return video["h264"] != nil
+}
+
+private func h264StartMessage() -> String {
+    #"{"event_type":"start","event":{"type":"video","format":"h264"}}"#
+}
+
+private func readToken(from args: Arguments) throws -> String? {
+    if let token = args.token, !token.isEmpty {
+        return token
+    }
+
+    if let tokenFile = args.tokenFile, !tokenFile.isEmpty {
+        let token = try String(contentsOfFile: tokenFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
+    }
+
+    if let tokenEnv = args.tokenEnv, !tokenEnv.isEmpty {
+        let token = ProcessInfo.processInfo.environment[tokenEnv]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return token?.isEmpty == false ? token : nil
+    }
+
+    return nil
+}
+
 private func runCapture() async throws {
     let args = try parseArguments(Array(CommandLine.arguments.dropFirst()))
     let host = args.host ?? ""
@@ -277,10 +354,10 @@ private func runCapture() async throws {
     )
 
     let authToken: String?
-    if let token = args.token, !token.isEmpty {
+    if let token = try readToken(from: args) {
         authToken = token
     } else if let password = args.password {
-        print("Logging in to \(base.absoluteString) as \(args.user)...")
+        log("Logging in to \(base.absoluteString) as \(args.user)...")
         authToken = try await login(baseURL: base, user: args.user, password: password, session: session)
     } else {
         authToken = nil
@@ -296,13 +373,31 @@ private func runCapture() async throws {
         request.setValue("auth_token=\(authToken)", forHTTPHeaderField: "Cookie")
     }
 
-    print("Connecting to \(mediaURL.absoluteString)")
-    print("Writing capture to \(captureURL.path)")
-    print("Writing metadata to \(sidecarURL.path)")
+    log("Connecting to \(mediaURL.absoluteString)")
+    log("Writing capture to \(captureURL.path)")
+    log("Writing metadata to \(sidecarURL.path)")
 
     let task = session.webSocketTask(with: request)
     task.resume()
+    let cancelAtDeadline = Task {
+        try? await Task.sleep(nanoseconds: UInt64(args.duration * 1_000_000_000))
+        task.cancel(with: .normalClosure, reason: nil)
+    }
+    let heartbeatTask = Task {
+        guard args.autoHeartbeat else {
+            return
+        }
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else {
+                break
+            }
+            try? await task.send(.data(Data([0])))
+        }
+    }
     defer {
+        cancelAtDeadline.cancel()
+        heartbeatTask.cancel()
         task.cancel(with: .normalClosure, reason: nil)
         session.invalidateAndCancel()
     }
@@ -314,29 +409,69 @@ private func runCapture() async throws {
     var messageIndex = 0
     var binaryMessages = 0
     var textMessages = 0
+    var sentTextMessages = 0
     var payloadBytes = 0
+    var h264StartSent = false
 
     while Date() < deadline {
-        let message = try await task.receive()
+        let message: URLSessionWebSocketTask.Message
+        do {
+            message = try await task.receive()
+        } catch {
+            if Date() >= deadline {
+                break
+            }
+            throw error
+        }
+
         let elapsed = Date().timeIntervalSince(started)
-        messageIndex += 1
 
         switch message {
         case .data(let payload):
             binaryMessages += 1
             payloadBytes += payload.count
-            appendRecordHeader(type: 1, length: payload.count, to: &capture)
-            capture.append(payload)
-            sidecar.append(Data(sidecarLine(index: messageIndex, type: "binary", payload: payload, elapsed: elapsed).utf8))
-            print("#\(messageIndex) binary \(payload.count)B prefix=\(hexPrefix(payload))")
+            recordMessage(
+                index: &messageIndex,
+                recordType: 1,
+                sidecarType: "inbound-binary",
+                payload: payload,
+                elapsed: elapsed,
+                capture: &capture,
+                sidecar: &sidecar
+            )
+            log("#\(messageIndex) binary \(payload.count)B prefix=\(hexPrefix(payload))")
         case .string(let text):
             let payload = Data(text.utf8)
             textMessages += 1
             payloadBytes += payload.count
-            appendRecordHeader(type: 2, length: payload.count, to: &capture)
-            capture.append(payload)
-            sidecar.append(Data(sidecarLine(index: messageIndex, type: "text", payload: payload, elapsed: elapsed).utf8))
-            print("#\(messageIndex) text \(payload.count)B prefix=\(hexPrefix(payload))")
+            recordMessage(
+                index: &messageIndex,
+                recordType: 2,
+                sidecarType: "inbound-text",
+                payload: payload,
+                elapsed: elapsed,
+                capture: &capture,
+                sidecar: &sidecar
+            )
+            log("#\(messageIndex) text \(payload.count)B prefix=\(hexPrefix(payload))")
+
+            if args.autoStartH264, !h264StartSent, shouldStartH264(from: text) {
+                let start = h264StartMessage()
+                try await task.send(.string(start))
+                let startPayload = Data(start.utf8)
+                sentTextMessages += 1
+                h264StartSent = true
+                recordMessage(
+                    index: &messageIndex,
+                    recordType: 3,
+                    sidecarType: "outbound-text",
+                    payload: startPayload,
+                    elapsed: Date().timeIntervalSince(started),
+                    capture: &capture,
+                    sidecar: &sidecar
+                )
+                log("#\(messageIndex) sent text \(startPayload.count)B prefix=\(hexPrefix(startPayload))")
+            }
         @unknown default:
             throw CaptureError.websocketClosed
         }
@@ -345,7 +480,7 @@ private func runCapture() async throws {
     try capture.write(to: captureURL, options: .atomic)
     try sidecar.write(to: sidecarURL, options: .atomic)
 
-    print("Capture complete: messages=\(messageIndex) binary=\(binaryMessages) text=\(textMessages) payload_bytes=\(payloadBytes)")
+    log("Capture complete: messages=\(messageIndex) binary=\(binaryMessages) text=\(textMessages) sent_text=\(sentTextMessages) payload_bytes=\(payloadBytes)")
 }
 
 var exitCode: Int32 = 0
