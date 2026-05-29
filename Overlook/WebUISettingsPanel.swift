@@ -117,12 +117,60 @@ struct WebUISettingsPanel: View {
 
     private let videoQualityCustomTag: Int = -1
     private let videoQualityInsaneTag: Int = 4
+    private let videoQualityPresetOptions: [(tag: Int, label: String, details: String)] = [
+        (0, "Low", "500 kbps, GOP 30, stream quality 0"),
+        (1, "Medium", "2 Mbps, GOP 30, stream quality 1"),
+        (2, "High", "5 Mbps, GOP 60, stream quality 2"),
+        (3, "Ultra-high", "8 Mbps, GOP 60, stream quality 3"),
+        (4, "Insane", "20 Mbps, GOP 60, quality 100, stream quality 3"),
+        (-1, "Custom", "manual streamer params"),
+    ]
 
     private let appAppearanceOptions: [(String, String)] = [
         ("system", "System"),
         ("light", "Light"),
         ("dark", "Dark"),
     ]
+
+    private func videoQualityPresetDetails(for tag: Int) -> String {
+        videoQualityPresetOptions.first(where: { $0.tag == tag })?.details ?? "manual streamer params"
+    }
+
+    private func bitrateLabel(_ kbps: Int) -> String {
+        if kbps >= 1000, kbps % 1000 == 0 {
+            return "\(kbps / 1000) Mbps"
+        }
+        if kbps >= 1000 {
+            return String(format: "%.1f Mbps", Double(kbps) / 1000.0)
+        }
+        return "\(kbps) kbps"
+    }
+
+    private var activeStreamerParamsText: String {
+        guard let params = streamerState?.params else { return "Unknown" }
+
+        var parts: [String] = []
+        if let resolution = params.resolution?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !resolution.isEmpty {
+            parts.append(resolution)
+        }
+        if let desiredFps = params.desiredFps {
+            parts.append("\(desiredFps) fps")
+        }
+        if let quality = params.quality {
+            parts.append("quality \(quality)")
+        }
+        if let bitrate = params.h264Bitrate {
+            parts.append("H.264 \(bitrateLabel(bitrate))")
+        }
+        if let gop = params.h264Gop {
+            parts.append("GOP \(gop)")
+        }
+        if let zeroDelay = params.zeroDelay {
+            parts.append("zero delay \(zeroDelay ? "on" : "off")")
+        }
+        return parts.isEmpty ? "Unknown" : parts.joined(separator: ", ")
+    }
 
     private static let integerFormatter: NumberFormatter = {
         let nf = NumberFormatter()
@@ -283,18 +331,21 @@ struct WebUISettingsPanel: View {
                             }
 
                             Picker("Quality", selection: $selectedVideoQualityPreset) {
-                                Text("Low").tag(0)
-                                Text("Medium").tag(1)
-                                Text("High").tag(2)
-                                Text("Ultra-high").tag(3)
-                                Text("Insane").tag(videoQualityInsaneTag)
-                                Text("Custom").tag(videoQualityCustomTag)
+                                ForEach(videoQualityPresetOptions, id: \.tag) { preset in
+                                    Text("\(preset.label) (\(preset.details))").tag(preset.tag)
+                                }
                             }
                             .disabled(kvmDeviceManager.glkvmClient == nil || isLoading || isApplying || isApplyingStreamer || isApplyingEdid)
                             .onChange(of: selectedVideoQualityPreset) { _, newValue in
                                 guard isLoading == false else { return }
                                 Task { await applyVideoQualityPreset(newValue) }
                             }
+
+                            Text("Preset sends: \(videoQualityPresetDetails(for: selectedVideoQualityPreset))")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
 
                             Picker("Transfer", selection: bindingString(
                                 get: { $0.videoMode },
@@ -383,6 +434,16 @@ struct WebUISettingsPanel: View {
 
                             Toggle("Hide system cursor over stream", isOn: $hideSystemCursorOverStream)
                             Toggle("Reduce stream when hidden", isOn: $reduceHiddenStreamQuality)
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Active streamer params")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(activeStreamerParamsText)
+                                    .font(.caption)
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
 
                             if selectedVideoQualityPreset == videoQualityCustomTag {
                                 VStack(alignment: .leading, spacing: 8) {
