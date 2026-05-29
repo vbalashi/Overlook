@@ -33,7 +33,7 @@ class InputManager: ObservableObject {
     private var mouseMoveSenderTask: Task<Void, Never>?
     private var pendingFallbackMouseMove: PendingAbsoluteMouseMove?
     private var fallbackMouseMoveSenderTask: Task<Void, Never>?
-    nonisolated private static let mouseMoveSendIntervalNs: UInt64 = 4_166_667
+    nonisolated private static let mouseMoveSendIntervalNs: UInt64 = 16_666_667
     nonisolated private static let staleMouseMoveAgeSeconds: CFTimeInterval = 0.5
     nonisolated private static let staleMouseButtonAgeSeconds: CFTimeInterval = 1.0
     nonisolated private static let defaultCommandKeyCode: UInt16 = 55
