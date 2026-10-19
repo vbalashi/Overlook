@@ -89,7 +89,9 @@ final class AgentServerManager: ObservableObject {
         print("[AgentServer] Starting on port \(port)")
         do {
             let nwPort = NWEndpoint.Port(rawValue: port)!
-            let listener = try NWListener(using: .tcp, on: nwPort)
+            let parameters = NWParameters.tcp
+            parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: nwPort)
+            let listener = try NWListener(using: parameters)
             self.listener = listener
 
             listener.newConnectionHandler = { [weak self] connection in
@@ -147,10 +149,35 @@ final class AgentServerManager: ObservableObject {
 
             // Wait until we have the full HTTP header (ends with \r\n\r\n)
             let headerSeparator = Data("\r\n\r\n".utf8)
-            if buf.range(of: headerSeparator) != nil {
+            if let separator = buf.range(of: headerSeparator) {
+                let header = String(decoding: buf[..<separator.lowerBound], as: UTF8.self)
+                let lines = header.components(separatedBy: "\r\n")
+                var contentLength = 0
+                for line in lines.dropFirst() {
+                    guard let colon = line.firstIndex(of: ":") else { continue }
+                    let name = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+                    let value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+                    if name == "transfer-encoding" {
+                        Task { @MainActor in self.send(.error("Transfer-Encoding is not supported"), on: connection) }
+                        return
+                    }
+                    if name == "content-length" {
+                        guard let length = Int(value), length >= 0, length <= 16 * 1024 * 1024 else {
+                            Task { @MainActor in self.send(.error("Invalid Content-Length (maximum 16 MiB)"), on: connection) }
+                            return
+                        }
+                        contentLength = length
+                    }
+                }
+                guard buf.count - separator.upperBound >= contentLength else {
+                    if isComplete || error != nil { connection.cancel(); return }
+                    Task { @MainActor in self.accumulate(connection: connection, buffer: buf) }
+                    return
+                }
+                let request = Data(buf.prefix(separator.upperBound + contentLength))
                 Task { @MainActor in
-                    print("[AgentServer] Request received (\(buf.count) bytes)")
-                    let response = await self.processRequest(data: buf)
+                    print("[AgentServer] Request received (\(request.count) bytes)")
+                    let response = await self.processRequest(data: request)
                     self.send(response, on: connection)
                 }
             } else if isComplete || error != nil {
@@ -234,7 +261,7 @@ final class AgentServerManager: ObservableObject {
         let bearer = req.headers["authorization"] ?? ""
         let token = bearer.hasPrefix("Bearer ") ? String(bearer.dropFirst(7)) : bearer
         guard token == apiKey else {
-            print("[AgentServer] Auth failed — token: '\(token)'")
+            print("[AgentServer] Authentication failed")
             return .error("Unauthorized", status: "401 Unauthorized")
         }
 
@@ -281,7 +308,11 @@ final class AgentServerManager: ObservableObject {
                 return .error("Not connected", status: "503 Service Unavailable")
             }
             do {
-                try await client.hidPrint(text: text)
+                if let value = body["speed"], !(value is String) || HIDTypingSpeed(rawValue: value as? String ?? "") == nil {
+                    return .error("Invalid speed; use slow, balanced, fast, or turbo")
+                }
+                try await client.hidPrint(text: text, slow: body["slow"] as? Bool,
+                                          speed: (body["speed"] as? String).flatMap(HIDTypingSpeed.init(rawValue:)))
                 return .json(["ok": true])
             } catch {
                 return .error(error.localizedDescription, status: "500 Internal Server Error")
@@ -326,7 +357,7 @@ final class AgentServerManager: ObservableObject {
             } else {
                 return .error("Missing 'px'/'py' (pixel) or 'x'/'y' (HID) coordinates")
             }
-            guard let ws = inputManager?.agentWebSocketClient else {
+            guard let ws = inputManager else {
                 return .error("Not connected", status: "503 Service Unavailable")
             }
             do {
@@ -341,7 +372,7 @@ final class AgentServerManager: ObservableObject {
         case ("POST", "/mouse/click"):
             let body = jsonBody(req.body) ?? [:]
             let button = body["button"] as? String ?? "left"
-            guard let ws = inputManager?.agentWebSocketClient else {
+            guard let ws = inputManager else {
                 return .error("Not connected", status: "503 Service Unavailable")
             }
             do {
@@ -377,7 +408,7 @@ final class AgentServerManager: ObservableObject {
             } else {
                 return .error("Provide pixel coords as 'px'/'py' or HID coords as 'x'/'y'")
             }
-            guard let ws = inputManager?.agentWebSocketClient else {
+            guard let ws = inputManager else {
                 return .error("Not connected", status: "503 Service Unavailable")
             }
             do {
@@ -399,7 +430,7 @@ final class AgentServerManager: ObservableObject {
             }
             let dx = asInt(body["deltaX"]) ?? 0
             let dy = asInt(body["deltaY"]) ?? 0
-            guard let ws = inputManager?.agentWebSocketClient else {
+            guard let ws = inputManager else {
                 return .error("Not connected", status: "503 Service Unavailable")
             }
             do {
@@ -458,7 +489,7 @@ final class AgentServerManager: ObservableObject {
             guard let pixelBuffer = await currentVideoFrame() else {
                 return .error("No video frame available", status: "503 Service Unavailable")
             }
-            guard let ws = inputManager?.agentWebSocketClient else {
+            guard let ws = inputManager else {
                 return .error("Not connected", status: "503 Service Unavailable")
             }
             let fw = CVPixelBufferGetWidth(pixelBuffer)
@@ -569,7 +600,7 @@ final class AgentServerManager: ObservableObject {
 
             ["name": "type_text",
              "description": "Type text on the remote machine via HID",
-             "inputSchema": schema(["text": prop("string", "The text to type")], required: ["text"])],
+             "inputSchema": schema(["text": prop("string", "The text to type"), "slow": prop("boolean", "Override speed with slow (true) or fast (false)"), "speed": prop("string", "Typing speed; defaults to the saved app setting", ["enum": ["slow", "balanced", "fast", "turbo"]])], required: ["text"])],
 
             ["name": "press_key",
              "description": "Press a key or shortcut on the remote machine. Examples: 'Enter', 'Escape', 'Tab', 'ctrl+c', 'meta+tab'",
@@ -652,7 +683,11 @@ final class AgentServerManager: ObservableObject {
         case "type_text":
             guard let text = args["text"] as? String else { throw MCPError("Missing 'text'") }
             guard let client = kvmDeviceManager?.glkvmClient else { throw MCPError("Not connected") }
-            try await client.hidPrint(text: text)
+            if let value = args["speed"], !(value is String) || HIDTypingSpeed(rawValue: value as? String ?? "") == nil {
+                throw MCPError("Invalid speed; use slow, balanced, fast, or turbo")
+            }
+            try await client.hidPrint(text: text, slow: args["slow"] as? Bool,
+                                      speed: (args["speed"] as? String).flatMap(HIDTypingSpeed.init(rawValue:)))
             return [["type": "text", "text": "Typed: \(text)"]]
 
         case "press_key":
@@ -673,7 +708,7 @@ final class AgentServerManager: ObservableObject {
 
         case "move_mouse":
             guard let x = asInt(args["x"]), let y = asInt(args["y"]) else { throw MCPError("Missing 'x' or 'y'") }
-            guard let ws = inputManager?.agentWebSocketClient else { throw MCPError("Not connected") }
+            guard let ws = inputManager else { throw MCPError("Not connected") }
             try await ws.sendHidMouseMove(toX: x, toY: y)
             inputManager?.lastMouseX = x
             inputManager?.lastMouseY = y
@@ -681,7 +716,7 @@ final class AgentServerManager: ObservableObject {
 
         case "click_mouse":
             let button = args["button"] as? String ?? "left"
-            guard let ws = inputManager?.agentWebSocketClient else { throw MCPError("Not connected") }
+            guard let ws = inputManager else { throw MCPError("Not connected") }
             try await ws.sendHidMouseButton(button: button, state: true)
             try await Task.sleep(nanoseconds: 50_000_000)
             try await ws.sendHidMouseButton(button: button, state: false)
@@ -690,7 +725,7 @@ final class AgentServerManager: ObservableObject {
         case "scroll_mouse":
             let dx = asInt(args["deltaX"]) ?? 0
             let dy = asInt(args["deltaY"]) ?? 0
-            guard let ws = inputManager?.agentWebSocketClient else { throw MCPError("Not connected") }
+            guard let ws = inputManager else { throw MCPError("Not connected") }
             let stepsX = dx == 0 ? 0 : (dx > 0 ? 1 : -1)
             let stepsY = dy == 0 ? 0 : (dy > 0 ? 1 : -1)
             for _ in 0..<max(abs(dx), abs(dy)) {
@@ -706,7 +741,7 @@ final class AgentServerManager: ObservableObject {
         case "click_at_pixel":
             guard let px = asInt(args["x"]), let py = asInt(args["y"]) else { throw MCPError("Missing 'x' or 'y'") }
             let button = args["button"] as? String ?? "left"
-            guard let ws = inputManager?.agentWebSocketClient else { throw MCPError("Not connected") }
+            guard let ws = inputManager else { throw MCPError("Not connected") }
             let (hx2, hy2, fw2, fh2) = pixelToHID(px: px, py: py)
             try await ws.sendHidMouseMove(toX: hx2, toY: hy2)
             inputManager?.lastMouseX = hx2
@@ -737,7 +772,7 @@ final class AgentServerManager: ObservableObject {
 
         case "get_globalprotect_status":
             guard let pixelBuffer = await currentVideoFrame() else { throw MCPError("No video frame available") }
-            guard let ws = inputManager?.agentWebSocketClient else { throw MCPError("Not connected") }
+            guard let ws = inputManager else { throw MCPError("Not connected") }
             let fw = CVPixelBufferGetWidth(pixelBuffer)
             let menuBarY = 15
             for scanX in stride(from: fw - 30, through: fw - 700, by: -22) {

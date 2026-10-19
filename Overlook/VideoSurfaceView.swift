@@ -551,6 +551,7 @@ final class PixelBufferDisplayView: NSView {
 }
 
 final class TrackingContainerView: NSView {
+    override var acceptsFirstResponder: Bool { true }
     var onMouseMove: ((CGPoint) -> Void)?
     var onMouseMoveWithLayerInfo: ((CGPoint, String) -> Void)?
     var onMouseButton: ((MouseButton, Bool, CGPoint) -> Void)?
@@ -683,6 +684,7 @@ final class TrackingContainerView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         super.mouseDown(with: event)
         let p = convert(event.locationInWindow, from: nil)
         let flipped = CGPoint(x: p.x, y: bounds.height - p.y)
@@ -697,6 +699,7 @@ final class TrackingContainerView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         super.rightMouseDown(with: event)
         let p = convert(event.locationInWindow, from: nil)
         let flipped = CGPoint(x: p.x, y: bounds.height - p.y)
@@ -711,6 +714,7 @@ final class TrackingContainerView: NSView {
     }
 
     override func otherMouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         super.otherMouseDown(with: event)
         guard event.buttonNumber == 2 else { return }
         let p = convert(event.locationInWindow, from: nil)

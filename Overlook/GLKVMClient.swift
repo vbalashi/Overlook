@@ -124,6 +124,24 @@ struct GLKVMSystemGetConfigResult: Decodable {
     let config: GLKVMSystemConfig
 }
 
+struct GLKVMUSBFunctions: Codable, Hashable {
+    var enableMouse: Bool
+    var enableKeyboard: Bool
+    var enableMicrophone: Bool
+    var enableCamera: Bool
+    var startCDROM: Bool
+    var startFlashDrive: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case enableMouse = "enable_mouse"
+        case enableKeyboard = "enable_keyboard"
+        case enableMicrophone = "enable_mic"
+        case enableCamera = "enable_camera"
+        case startCDROM = "start_cdrom"
+        case startFlashDrive = "start_flash"
+    }
+}
+
 struct GLKVMSystemConfigShortcut: Codable, Hashable {
     let keys: [String]
     let label: String
@@ -154,8 +172,18 @@ struct GLKVMSystemConfig: Codable, Hashable {
     var videoLayout: String
     var fecPackets: Int
     var swapCmdCtrl: Bool
+    var hidOverDataChannel: Bool?
+    var showFullscreenToolPanel: Bool?
+    var showFooterStatusPanel: Bool?
+    var tabTitle: String?
+    var statsDashboardView: String?
+    var webRTCStatsDebug: Bool?
+    var joinBetaProgram: Bool?
+    private var additionalFields: [String: JSONValue]
 
-    enum CodingKeys: String, CodingKey {
+    var additionalFieldCount: Int { additionalFields.count }
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case shortcuts
         case orientation
         case streamQuality = "stream_quality"
@@ -180,6 +208,13 @@ struct GLKVMSystemConfig: Codable, Hashable {
         case videoLayout = "video_layout"
         case fecPackets = "fec_packets"
         case swapCmdCtrl = "swap_cmd_ctrl"
+        case hidOverDataChannel = "hid_over_datachannel"
+        case showFullscreenToolPanel = "show_fullscreen_tool_panel"
+        case showFooterStatusPanel = "show_footer_status_panel"
+        case tabTitle = "tab_title"
+        case statsDashboardView = "stats_dashboard_view"
+        case webRTCStatsDebug = "webrtc_stats_debug"
+        case joinBetaProgram = "join_beta_program"
     }
 
     init(from decoder: Decoder) throws {
@@ -208,6 +243,81 @@ struct GLKVMSystemConfig: Codable, Hashable {
         videoLayout = (try? c.decode(String.self, forKey: .videoLayout)) ?? "fit_screen"
         fecPackets = (try? c.decode(Int.self, forKey: .fecPackets)) ?? 20
         swapCmdCtrl = (try? c.decode(Bool.self, forKey: .swapCmdCtrl)) ?? false
+        hidOverDataChannel = try? c.decode(Bool.self, forKey: .hidOverDataChannel)
+        showFullscreenToolPanel = try? c.decode(Bool.self, forKey: .showFullscreenToolPanel)
+        showFooterStatusPanel = try? c.decode(Bool.self, forKey: .showFooterStatusPanel)
+        tabTitle = try? c.decode(String.self, forKey: .tabTitle)
+        statsDashboardView = try? c.decode(String.self, forKey: .statsDashboardView)
+        webRTCStatsDebug = try? c.decode(Bool.self, forKey: .webRTCStatsDebug)
+        joinBetaProgram = try? c.decode(Bool.self, forKey: .joinBetaProgram)
+
+        let dynamic = try decoder.container(keyedBy: GLKVMConfigCodingKey.self)
+        let knownKeys = Set(CodingKeys.allCases.map(\.rawValue))
+        additionalFields = try Dictionary(uniqueKeysWithValues: dynamic.allKeys.compactMap { key in
+            guard !knownKeys.contains(key.stringValue) else { return nil }
+            return (key.stringValue, try dynamic.decode(JSONValue.self, forKey: key))
+        })
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var dynamic = encoder.container(keyedBy: GLKVMConfigCodingKey.self)
+        for (name, value) in additionalFields {
+            try dynamic.encode(value, forKey: GLKVMConfigCodingKey(name))
+        }
+
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(shortcuts, forKey: .shortcuts)
+        try c.encode(orientation, forKey: .orientation)
+        try c.encode(streamQuality, forKey: .streamQuality)
+        try c.encode(videoMode, forKey: .videoMode)
+        try c.encode(showCursor, forKey: .showCursor)
+        try c.encode(mousePolling, forKey: .mousePolling)
+        try c.encode(mouseControl, forKey: .mouseControl)
+        try c.encode(relativeSense, forKey: .relativeSense)
+        try c.encode(scrollRate, forKey: .scrollRate)
+        try c.encode(reverseScrolling, forKey: .reverseScrolling)
+        try c.encode(keyboardControl, forKey: .keyboardControl)
+        try c.encode(themeMode, forKey: .themeMode)
+        try c.encode(mouseJiggle, forKey: .mouseJiggle)
+        try c.encode(keymap, forKey: .keymap)
+        try c.encode(gotMutedPanelTip, forKey: .gotMutedPanelTip)
+        try c.encode(isAbsoluteMouse, forKey: .isAbsoluteMouse)
+        try c.encode(fingerbotStrength, forKey: .fingerbotStrength)
+        try c.encode(videoProcessing, forKey: .videoProcessing)
+        try c.encode(language, forKey: .language)
+        try c.encode(videoFormat, forKey: .videoFormat)
+        try c.encode(badLinkMode, forKey: .badLinkMode)
+        try c.encode(videoLayout, forKey: .videoLayout)
+        try c.encode(fecPackets, forKey: .fecPackets)
+        try c.encode(swapCmdCtrl, forKey: .swapCmdCtrl)
+        try c.encodeIfPresent(hidOverDataChannel, forKey: .hidOverDataChannel)
+        try c.encodeIfPresent(showFullscreenToolPanel, forKey: .showFullscreenToolPanel)
+        try c.encodeIfPresent(showFooterStatusPanel, forKey: .showFooterStatusPanel)
+        try c.encodeIfPresent(tabTitle, forKey: .tabTitle)
+        try c.encodeIfPresent(statsDashboardView, forKey: .statsDashboardView)
+        try c.encodeIfPresent(webRTCStatsDebug, forKey: .webRTCStatsDebug)
+        try c.encodeIfPresent(joinBetaProgram, forKey: .joinBetaProgram)
+    }
+
+    mutating func refreshAdditionalFields(from latest: GLKVMSystemConfig) {
+        additionalFields = latest.additionalFields
+    }
+}
+
+private struct GLKVMConfigCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+
+    init(_ stringValue: String) {
+        self.stringValue = stringValue
+    }
+
+    init?(stringValue: String) {
+        self.init(stringValue)
+    }
+
+    init?(intValue: Int) {
+        return nil
     }
 }
 
@@ -393,34 +503,77 @@ struct GLKVMAuthLoginResult: Decodable {
     let token: String
 }
 
+private actor HIDPrintQueue {
+    private var tail: Task<Void, Error>?
+
+    func run(_ operation: @escaping @Sendable () async throws -> Void) async throws {
+        let previous = tail
+        let task = Task {
+            // A failed paste must not prevent a later paste from running.
+            _ = try? await previous?.value
+            try Task.checkCancellation()
+            try await operation()
+        }
+        tail = task
+        try await withTaskCancellationHandler {
+            try await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+}
+
+enum HIDTypingSpeed: String, CaseIterable {
+    case slow, balanced, fast, turbo
+
+    static let defaultsKey = "overlook.input.typingSpeed"
+    static var selected: Self {
+        Self(rawValue: UserDefaults.standard.string(forKey: defaultsKey) ?? "") ?? .fast
+    }
+    var title: String {
+        switch self {
+        case .slow: return "Slow"
+        case .balanced: return "Balanced"
+        case .fast: return "Fast"
+        case .turbo: return "Turbo"
+        }
+    }
+    var usesSlowKeys: Bool { self == .slow }
+    var chunkBytes: Int {
+        switch self {
+        case .balanced: return 128
+        case .turbo: return 4096
+        default: return 512
+        }
+    }
+    var pauseNanoseconds: UInt64 { self == .balanced ? 200_000_000 : 0 }
+}
+
 final class GLKVMClient {
-    enum ClientError: Error {
+    enum ClientError: LocalizedError {
         case invalidBaseURL
         case invalidURL
         case httpError(statusCode: Int, body: String?)
         case decodingFailed
-    }
+        case authenticationRejected
 
-    private final class SessionDelegate: NSObject, URLSessionDelegate {
-        let allowInsecureTLS: Bool
-
-        init(allowInsecureTLS: Bool) {
-            self.allowInsecureTLS = allowInsecureTLS
-        }
-
-        func urlSession(
-            _ session: URLSession,
-            didReceive challenge: URLAuthenticationChallenge,
-            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-        ) {
-            guard allowInsecureTLS,
-                  challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-                  let trust = challenge.protectionSpace.serverTrust else {
-                completionHandler(.performDefaultHandling, nil)
-                return
+        var errorDescription: String? {
+            switch self {
+            case .invalidBaseURL, .invalidURL:
+                return "The device address is invalid."
+            case .decodingFailed:
+                return "The device returned an unexpected response. Its firmware may require a client update."
+            case .authenticationRejected:
+                return "The device rejected the login. Check the admin password and include the current two-factor code if enabled."
+            case .httpError(let status, _):
+                if status == 401 || status == 403 {
+                    return "The device session has expired or access was denied. Sign in again."
+                }
+                if status == 429 {
+                    return "Too many login attempts. Wait before trying again."
+                }
+                return "The device returned HTTP \(status)."
             }
-
-            completionHandler(.useCredential, URLCredential(trust: trust))
         }
     }
 
@@ -428,8 +581,15 @@ final class GLKVMClient {
     var authToken: String?
 
     private let session: URLSession
+    private let printSession: URLSession
+    private let printQueue = HIDPrintQueue()
 
-    init(host: String, port: Int = 443, authToken: String? = nil, allowInsecureTLS: Bool = true) throws {
+    init(
+        host: String,
+        port: Int = 443,
+        authToken: String? = nil,
+        tlsValidationPolicy: TLSValidationPolicy = .systemTrust
+    ) throws {
         let scheme = (port == 80 || port == 8080) ? "http" : "https"
         guard let url = URL(string: "\(scheme)://\(host):\(port)") else {
             throw ClientError.invalidBaseURL
@@ -448,12 +608,31 @@ final class GLKVMClient {
         config.timeoutIntervalForRequest = 15
         config.timeoutIntervalForResource = 30
 
-        OverlookLog.info("GLKVMClient init baseURL=\(url.absoluteString) allowInsecureTLS=\(allowInsecureTLS) timeoutRequest=\(config.timeoutIntervalForRequest) timeoutResource=\(config.timeoutIntervalForResource)")
-        self.session = URLSession(configuration: config, delegate: SessionDelegate(allowInsecureTLS: allowInsecureTLS), delegateQueue: nil)
+        OverlookLog.info("GLKVMClient init baseURL=\(url.absoluteString) tlsValidationPolicy=\(tlsValidationPolicy.rawValue) timeoutRequest=\(config.timeoutIntervalForRequest) timeoutResource=\(config.timeoutIntervalForResource)")
+        self.session = URLSession(
+            configuration: config,
+            delegate: TLSURLSessionDelegate(policy: tlsValidationPolicy),
+            delegateQueue: nil
+        )
+        // The print endpoint responds only after HID typing is finished. Keep
+        // long pastes independent of ordinary API timeouts and connections.
+        let printConfig = config.copy() as! URLSessionConfiguration
+        printConfig.timeoutIntervalForRequest = 300
+        printConfig.timeoutIntervalForResource = 600
+        self.printSession = URLSession(
+            configuration: printConfig,
+            delegate: TLSURLSessionDelegate(policy: tlsValidationPolicy),
+            delegateQueue: nil
+        )
     }
 
-    convenience init(device: KVMDevice, allowInsecureTLS: Bool = true) throws {
-        try self.init(host: device.host, port: device.port, authToken: device.authToken.isEmpty ? nil : device.authToken, allowInsecureTLS: allowInsecureTLS)
+    convenience init(device: KVMDevice) throws {
+        try self.init(
+            host: device.host,
+            port: device.port,
+            authToken: device.authToken.isEmpty ? nil : device.authToken,
+            tlsValidationPolicy: device.tlsValidationPolicy
+        )
     }
 
     private static func elapsedMilliseconds(since date: Date) -> Int {
@@ -488,7 +667,8 @@ final class GLKVMClient {
         query: [URLQueryItem] = [],
         body: Data? = nil,
         contentType: String? = nil,
-        responseType: Response.Type
+        responseType: Response.Type,
+        sessionOverride: URLSession? = nil
     ) async throws -> Response {
         let url = try makeURL(path: path, queryItems: query)
 
@@ -510,7 +690,7 @@ final class GLKVMClient {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await (sessionOverride ?? session).data(for: request)
         } catch {
             OverlookLog.error("HTTP request error method=\(method) url=\(OverlookLog.redactedURL(url)) durationMs=\(Self.elapsedMilliseconds(since: startedAt)) error=\(OverlookLog.describe(error))")
             throw error
@@ -614,10 +794,14 @@ final class GLKVMClient {
         guard (200...299).contains(http.statusCode) else {
             let bodyString = String(data: data, encoding: .utf8)
             OverlookLog.error("HTTP non-2xx method=POST url=\(OverlookLog.redactedURL(url)) status=\(http.statusCode) purpose=authLogin body=\(Self.preview(data))")
+            if http.statusCode == 401 || http.statusCode == 403 {
+                throw ClientError.authenticationRejected
+            }
             throw ClientError.httpError(statusCode: http.statusCode, body: bodyString)
         }
 
-        if let wrapped = try? JSONDecoder().decode(GLKVMResponse<GLKVMAuthLoginResult>.self, from: data) {
+        if let wrapped = try? JSONDecoder().decode(GLKVMResponse<GLKVMAuthLoginResult>.self, from: data),
+           !wrapped.result.token.isEmpty {
             return wrapped.result.token
         }
 
@@ -648,9 +832,46 @@ final class GLKVMClient {
         return response.result.config
     }
 
+    func getUSBFunctions() async throws -> GLKVMUSBFunctions {
+        let response = try await request(
+            method: "GET",
+            path: "api/system/otg_functions",
+            responseType: GLKVMResponse<GLKVMUSBFunctions>.self
+        )
+        return response.result
+    }
+
+    func setUSBFunction(_ name: String, enabled: Bool) async throws {
+        let allowedNames = Set([
+            "enable_mouse",
+            "enable_keyboard",
+            "enable_mic",
+            "enable_camera",
+            "start_cdrom",
+            "start_flash",
+        ])
+        guard allowedNames.contains(name) else { throw ClientError.invalidURL }
+        _ = try await request(
+            method: "POST",
+            path: "api/system/otg_functions",
+            query: [URLQueryItem(name: name, value: enabled ? "true" : "false")],
+            body: Data(),
+            contentType: "application/x-www-form-urlencoded",
+            responseType: GLKVMResponse<GLKVMEmptyResult>.self
+        )
+    }
+
     func setSystemConfig(_ config: GLKVMSystemConfig) async throws -> GLKVMSystemConfig {
+        // Firmware 1.10 replaces config.json with the complete POST body instead
+        // of merging it. Refresh unknown firmware-owned fields immediately before
+        // every write so an older Overlook build cannot erase newly added keys.
+        let latest = try await getSystemConfig()
+        var losslessConfig = config
+        losslessConfig.refreshAdditionalFields(from: latest)
+        OverlookLog.info("System config write preserving additionalFields=\(losslessConfig.additionalFieldCount)")
+
         let encoder = JSONEncoder()
-        let body = try encoder.encode(config)
+        let body = try encoder.encode(losslessConfig)
 
         let response = try await request(
             method: "POST",
@@ -660,6 +881,9 @@ final class GLKVMClient {
             responseType: GLKVMResponse<GLKVMSystemGetConfigResult>.self
         )
 
+        // The saved UI preference does not activate the firmware HID jiggler.
+        // Match the device WebUI by applying its runtime parameter as well.
+        try await setHIDParams(["jiggler": response.result.config.mouseJiggle ? "true" : "false"])
         return response.result.config
     }
 
@@ -778,6 +1002,8 @@ extension GLKVMClient.ClientError: CustomStringConvertible {
             return "invalidURL"
         case .decodingFailed:
             return "decodingFailed"
+        case .authenticationRejected:
+            return "authenticationRejected"
         case .httpError(let statusCode, let body):
             if let body, !body.isEmpty {
                 return "httpError(\(statusCode)): \(body)"
@@ -956,26 +1182,55 @@ extension GLKVMClient {
         return response.result
     }
 
-    func hidPrint(text: String, keymap: String? = nil, limit: Int? = nil, slow: Bool? = nil) async throws {
-        var query: [URLQueryItem] = []
+    static func hidPrintChunks(_ text: String, limit: Int? = nil, maxUTF8Bytes: Int = 512) -> [String] {
+        precondition(maxUTF8Bytes >= 4)
+        let scalars = limit.map { $0 > 0 ? Array(text.unicodeScalars.prefix($0)) : Array(text.unicodeScalars) }
+            ?? Array(text.unicodeScalars)
+        var chunks: [String] = []
+        var chunk = ""
+        var bytes = 0
+        for scalar in scalars {
+            let size = scalar.utf8.count
+            if bytes + size > maxUTF8Bytes {
+                chunks.append(chunk)
+                chunk = ""
+                bytes = 0
+            }
+            chunk.unicodeScalars.append(scalar)
+            bytes += size
+        }
+        if !chunk.isEmpty { chunks.append(chunk) }
+        return chunks
+    }
+
+    func hidPrint(text: String, keymap: String? = nil, limit: Int? = nil, slow: Bool? = nil, speed: HIDTypingSpeed? = nil) async throws {
+        let selectedSpeed = slow.map { $0 ? HIDTypingSpeed.slow : .fast } ?? speed ?? .selected
+        let chunks = Self.hidPrintChunks(text, limit: limit, maxUTF8Bytes: selectedSpeed.chunkBytes)
+        guard !chunks.isEmpty else { return }
+        // Firmware defaults to truncating at 1024 code points unless limit=0.
+        var query = [URLQueryItem(name: "limit", value: "0")]
         if let keymap {
             query.append(URLQueryItem(name: "keymap", value: keymap))
         }
-        if let limit {
-            query.append(URLQueryItem(name: "limit", value: String(limit)))
+        query.append(URLQueryItem(name: "slow", value: selectedSpeed.usesSlowKeys ? "true" : "false"))
+        let printQuery = query
+        try await printQueue.run { [self] in
+            for (index, chunk) in chunks.enumerated() {
+                try Task.checkCancellation()
+                if index > 0, selectedSpeed.pauseNanoseconds > 0 {
+                    try await Task.sleep(nanoseconds: selectedSpeed.pauseNanoseconds)
+                }
+                _ = try await request(
+                    method: "POST",
+                    path: "api/hid/print",
+                    query: printQuery,
+                    body: Data(chunk.utf8),
+                    contentType: "text/plain; charset=utf-8",
+                    responseType: GLKVMResponse<GLKVMEmptyResult>.self,
+                    sessionOverride: printSession
+                )
+            }
         }
-        if let slow {
-            query.append(URLQueryItem(name: "slow", value: slow ? "true" : "false"))
-        }
-        let body = text.data(using: .utf8) ?? Data()
-        _ = try await request(
-            method: "POST",
-            path: "api/hid/print",
-            query: query,
-            body: body,
-            contentType: "text/plain; charset=utf-8",
-            responseType: GLKVMResponse<GLKVMEmptyResult>.self
-        )
     }
 
     func sendHidShortcut(keys: [String]) async throws {

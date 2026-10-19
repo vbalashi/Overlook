@@ -9,6 +9,8 @@ struct WebUISettingsPanel: View {
 
     @Binding var isPresented: Bool
 
+    @AppStorage(HIDTypingSpeed.defaultsKey) private var typingSpeedRawValue: String = HIDTypingSpeed.fast.rawValue
+
     @AppStorage("overlook.appAppearance") private var appAppearance: String = "system"
     @AppStorage(TrackingContainerView.hideSystemCursorDefaultsKey) private var hideSystemCursorOverStream: Bool = false
     @AppStorage("overlook.autoResumeLastConnection") private var autoResumeLastConnection: Bool = false
@@ -18,17 +20,24 @@ struct WebUISettingsPanel: View {
     @AppStorage("overlook.audio.inputDeviceUID") private var audioInputDeviceUID: String = ""
     @AppStorage("overlook.audio.outputDeviceUID") private var audioOutputDeviceUID: String = ""
 
+    private struct SettingsLoadIdentity: Equatable {
+        let isPresented: Bool
+        let client: ObjectIdentifier?
+    }
+
     @State private var config: GLKVMSystemConfig?
     @State private var keymaps: GLKVMHidKeymapsState?
     @State private var streamerState: GLKVMStreamerState?
     @State private var systemTime: GLKVMSystemTimeInfo?
     @State private var networkConfig: GLKVMNetworkConfig?
     @State private var currentAp: GLKVMRepeaterStatus?
+    @State private var usbFunctions: GLKVMUSBFunctions?
     @State private var hostname: String = ""
     @State private var isLoading = false
     @State private var isApplying = false
     @State private var isApplyingSystemTime = false
     @State private var isLoadingNetwork = false
+    @State private var isApplyingUSBFunction = false
     @State private var isApplyingStreamer = false
     @State private var isApplyingEdid = false
     @State private var isRebootingKVM = false
@@ -48,6 +57,7 @@ struct WebUISettingsPanel: View {
     @State private var isRemoteExpanded = true
     @State private var isKeyboardExpanded = true
     @State private var isAudioExpanded = false
+    @State private var isUSBExpanded = false
     @State private var isSystemExpanded = false
     @State private var isNetworkExpanded = false
     @State private var isAdvancedExpanded = false
@@ -101,6 +111,7 @@ struct WebUISettingsPanel: View {
     ]
     private let transferOptions: [(String, String)] = [
         ("webrtc", "WebRTC mode"),
+        ("gl_webrtc", "WebRTC Native mode"),
         ("flex_fec", "WebRTC FEC mode"),
         ("direct_h264", "Direct H.264 mode"),
     ]
@@ -738,6 +749,15 @@ struct WebUISettingsPanel: View {
 
                     DisclosureGroup("Keyboard settings", isExpanded: $isKeyboardExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
+                            Picker("Paste speed", selection: $typingSpeedRawValue) {
+                                ForEach(HIDTypingSpeed.allCases, id: \.rawValue) { speed in
+                                    Text(speed.title).tag(speed.rawValue)
+                                }
+                            }
+                            Text("If characters are missed, choose Slow. Changes apply to the next paste.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
                             Toggle("Bad Link Mode", isOn: bindingBool(
                                 get: { $0.badLinkMode },
                                 set: { $0.badLinkMode = $1 },
@@ -825,6 +845,57 @@ struct WebUISettingsPanel: View {
                         .onChange(of: isAudioExpanded) { _, _ in refreshAudioDevices() }
                     }
 
+                    DisclosureGroup("USB Device Manager", isExpanded: $isUSBExpanded) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            if usbFunctions != nil {
+                                Toggle("Keyboard", isOn: usbFunctionBinding(
+                                    name: "enable_keyboard",
+                                    get: { $0.enableKeyboard },
+                                    set: { $0.enableKeyboard = $1 }
+                                ))
+                                Toggle("Mouse", isOn: usbFunctionBinding(
+                                    name: "enable_mouse",
+                                    get: { $0.enableMouse },
+                                    set: { $0.enableMouse = $1 }
+                                ))
+                                Toggle("Microphone", isOn: usbFunctionBinding(
+                                    name: "enable_mic",
+                                    get: { $0.enableMicrophone },
+                                    set: { $0.enableMicrophone = $1 }
+                                ))
+                                Toggle("Camera (Beta)", isOn: usbFunctionBinding(
+                                    name: "enable_camera",
+                                    get: { $0.enableCamera },
+                                    set: { $0.enableCamera = $1 }
+                                ))
+                                Toggle("CD-ROM", isOn: usbFunctionBinding(
+                                    name: "start_cdrom",
+                                    get: { $0.startCDROM },
+                                    set: { $0.startCDROM = $1 }
+                                ))
+                                Toggle("Flash drive", isOn: usbFunctionBinding(
+                                    name: "start_flash",
+                                    get: { $0.startFlashDrive },
+                                    set: { $0.startFlashDrive = $1 }
+                                ))
+                            } else {
+                                Text("USB function state is unavailable on this model or firmware.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            if isApplyingUSBFunction {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+
+                            Text("The device enforces its USB endpoint limit; unsupported combinations are rejected without changing the saved state.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.top, 6)
+                    }
+
                     DisclosureGroup("System", isExpanded: $isSystemExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
                             Toggle("Auto-resume last connection on launch", isOn: $autoResumeLastConnection)
@@ -854,6 +925,30 @@ struct WebUISettingsPanel: View {
                                     Text(label).tag(value)
                                 }
                             }
+
+                            Divider()
+
+                            Text("GLKVM Web Interface")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            TextField("Browser tab name", text: bindingString(
+                                get: { $0.tabTitle ?? "GLKVM" },
+                                set: { $0.tabTitle = $1 },
+                                defaultValue: "GLKVM"
+                            ))
+
+                            Toggle("Show fullscreen toolbar", isOn: bindingBool(
+                                get: { $0.showFullscreenToolPanel ?? true },
+                                set: { $0.showFullscreenToolPanel = $1 },
+                                defaultValue: true
+                            ))
+
+                            Toggle("Show bottom status bar", isOn: bindingBool(
+                                get: { $0.showFooterStatusPanel ?? true },
+                                set: { $0.showFooterStatusPanel = $1 },
+                                defaultValue: true
+                            ))
 
                             Picker("Timezone", selection: timezoneBinding) {
                                 ForEach(timezoneOptions, id: \.0) { value, label in
@@ -886,6 +981,24 @@ struct WebUISettingsPanel: View {
 
                     DisclosureGroup("Advanced", isExpanded: $isAdvancedExpanded) {
                         VStack(alignment: .leading, spacing: 10) {
+                            Toggle("HID over WebRTC data channel", isOn: bindingBool(
+                                get: { $0.hidOverDataChannel ?? true },
+                                set: { $0.hidOverDataChannel = $1 },
+                                defaultValue: true
+                            ))
+
+                            Toggle("WebRTC stats debug", isOn: bindingBool(
+                                get: { $0.webRTCStatsDebug ?? false },
+                                set: { $0.webRTCStatsDebug = $1 },
+                                defaultValue: false
+                            ))
+
+                            Toggle("Join GLKVM beta program", isOn: bindingBool(
+                                get: { $0.joinBetaProgram ?? false },
+                                set: { $0.joinBetaProgram = $1 },
+                                defaultValue: false
+                            ))
+
                             Button("Reset Stream + HID") {
                                 Task { await resetKVM() }
                             }
@@ -961,7 +1074,10 @@ struct WebUISettingsPanel: View {
         } message: {
             Text("This will restart the GLKVM device and temporarily disconnect the stream.")
         }
-        .task(id: isPresented) {
+        .task(id: SettingsLoadIdentity(
+            isPresented: isPresented,
+            client: kvmDeviceManager.glkvmClient.map(ObjectIdentifier.init)
+        )) {
             guard isPresented else { return }
             await load()
         }
@@ -1106,6 +1222,7 @@ struct WebUISettingsPanel: View {
                 systemTime = nil
                 networkConfig = nil
                 currentAp = nil
+                usbFunctions = nil
                 hostname = ""
                 currentEdid = ""
                 selectedEdidOption = "CUSTOMIZE"
@@ -1123,6 +1240,7 @@ struct WebUISettingsPanel: View {
             async let systemTime = try? client.getSystemTime()
             async let networkConfig = try? client.getNetworkConfig()
             async let currentAp = try? client.getCurrentAp()
+            async let usbFunctions = try? client.getUSBFunctions()
             async let hostname = try? client.getHostname()
             let config = try await client.getSystemConfig()
             let km = try await keymaps
@@ -1130,8 +1248,10 @@ struct WebUISettingsPanel: View {
             let time = await systemTime
             let network = await networkConfig
             let ap = await currentAp
+            let usb = await usbFunctions
             let host = await hostname
             let edidValue = try await client.getEDID()
+            guard !Task.isCancelled, kvmDeviceManager.glkvmClient === client else { return }
             await MainActor.run {
                 self.config = config
                 webRTCManager.setPreferLowLatencyPlayout(config.videoProcessing == "low_latency_first")
@@ -1140,6 +1260,7 @@ struct WebUISettingsPanel: View {
                 self.systemTime = time
                 self.networkConfig = network
                 self.currentAp = ap
+                self.usbFunctions = usb
                 self.hostname = host ?? ""
                 self.currentEdid = edidValue
                 syncEdidSelectionFromCurrent()
@@ -1648,6 +1769,39 @@ struct WebUISettingsPanel: View {
             set: { newValue in
                 guard config != nil, !isLoading, !isApplying else { return }
                 updateConfig { set(&$0, newValue) }
+            }
+        )
+    }
+
+    private func usbFunctionBinding(
+        name: String,
+        get: @escaping (GLKVMUSBFunctions) -> Bool,
+        set: @escaping (inout GLKVMUSBFunctions, Bool) -> Void
+    ) -> Binding<Bool> {
+        Binding(
+            get: { usbFunctions.map(get) ?? false },
+            set: { newValue in
+                guard var updated = usbFunctions, !isApplyingUSBFunction else { return }
+                let previous = updated
+                set(&updated, newValue)
+                usbFunctions = updated
+                isApplyingUSBFunction = true
+
+                Task { @MainActor in
+                    guard let client = kvmDeviceManager.glkvmClient else {
+                        usbFunctions = previous
+                        isApplyingUSBFunction = false
+                        return
+                    }
+                    do {
+                        try await client.setUSBFunction(name, enabled: newValue)
+                        usbFunctions = try await client.getUSBFunctions()
+                    } catch {
+                        usbFunctions = previous
+                        recordError("Failed to update USB device: \(error)")
+                    }
+                    isApplyingUSBFunction = false
+                }
             }
         )
     }

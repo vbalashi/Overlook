@@ -102,6 +102,25 @@ class InputManager: ObservableObject {
 
     var agentWebSocketClient: GLKVMClient.WebSocketClient? { glkvmWebSocketClient }
     
+    // Agent actions use the same ready native channel as direct user input.
+    func sendHidMouseMove(toX x: Int, toY y: Int) async throws {
+        if webRTCManager?.sendNativeHIDMouseMove(x: x, y: y) == true { return }
+        guard let client = glkvmClient else { throw NSError(domain: "Overlook.AgentInput", code: 1, userInfo: [NSLocalizedDescriptionKey: "No HID connection"]) }
+        try await client.sendHidMouseMove(toX: x, toY: y)
+    }
+
+    func sendHidMouseButton(button: String, state: Bool) async throws {
+        if webRTCManager?.sendNativeHIDMouseButton(button: button, isDown: state) == true { return }
+        guard let client = glkvmClient else { throw NSError(domain: "Overlook.AgentInput", code: 1, userInfo: [NSLocalizedDescriptionKey: "No HID connection"]) }
+        try await client.sendHidMouseButton(button: button, state: state)
+    }
+
+    func sendHidMouseWheel(deltaX: Int, deltaY: Int) async throws {
+        if webRTCManager?.sendNativeHIDMouseWheel(deltaX: deltaX, deltaY: deltaY) == true { return }
+        guard let client = glkvmClient else { throw NSError(domain: "Overlook.AgentInput", code: 1, userInfo: [NSLocalizedDescriptionKey: "No HID connection"]) }
+        try await client.sendHidMouseWheel(deltaX: deltaX, deltaY: deltaY)
+    }
+
     func setSnippetModeActive(_ active: Bool) {
         let wasActive = isSnippetModeActive
         isSnippetModeActive = active
@@ -137,6 +156,10 @@ class InputManager: ObservableObject {
         logCursorDiagnosticsIfDue(pointInView: pointInView, viewSize: viewSize, videoSize: videoSize, sourceContentRectInVideo: sourceContentRectInVideo, normalized: normalized, layerInfo: videoViewLayerInfo)
         let moveEvent = MouseMoveEvent(position: normalized, timestamp: CACurrentMediaTime())
         logInputDiagnosticsIfDue(event: moveEvent)
+        if webRTCManager?.isNativeHIDReady == true {
+            sendWebRTCMouseMoveEvent(moveEvent)
+            return
+        }
         if transportMode == .glkvmWebSocket {
             if glkvmWebSocketClient != nil {
                 enqueueMouseMoveEvent(moveEvent)
@@ -425,6 +448,13 @@ class InputManager: ObservableObject {
     private func handleKeyEvent(_ event: NSEvent) -> NSEvent? {
         guard isKeyboardCaptureEnabled else { return event }
 
+        // Native forms (especially password sheets) must never forward text to
+        // the remote machine, even during a reconnect or overlay transition.
+        if let window = event.window ?? NSApp.keyWindow {
+            if window.sheetParent != nil || window.attachedSheet != nil { return event }
+            if let editor = window.firstResponder as? NSTextView, editor.isEditable { return event }
+        }
+
         if isSnippetModeActive {
             return handleKeyEventDuringSnippet(event)
         }
@@ -625,6 +655,9 @@ class InputManager: ObservableObject {
         let option = modifiers.contains(.option)
         let control = modifiers.contains(.control)
 
+        // App switching belongs to macOS, including the reverse direction.
+        if cmd, !option, !control, keyCode == 48 { return .passthrough }
+
         if cmd, shift {
             if !option, !control, keyCode == vKeyCode {
                 return .pasteClipboard
@@ -820,12 +853,11 @@ class InputManager: ObservableObject {
     func pasteMacClipboardToRemote() {
         guard let client = glkvmClient else { return }
         guard let text = NSPasteboard.general.string(forType: .string) else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !text.isEmpty else { return }
 
         Task {
             do {
-                try await client.hidPrint(text: trimmed)
+                try await client.hidPrint(text: text)
             } catch {
                 print("Paste to remote failed: \(error)")
             }
@@ -895,6 +927,11 @@ class InputManager: ObservableObject {
     }
     
     private func sendKeyEvent(_ event: KeyEvent) {
+        if webRTCManager?.isNativeHIDReady == true {
+            sendWebRTCKeyEvent(event)
+            return
+        }
+
         if transportMode == .glkvmWebSocket,
            let key = glkvmKeyForMacKeyCode(event.keyCode),
            let ws = glkvmWebSocketClient {
@@ -947,6 +984,11 @@ class InputManager: ObservableObject {
     }
 
     private func sendWebRTCKeyEvent(_ event: KeyEvent) {
+        if let key = glkvmKeyForMacKeyCode(event.keyCode),
+           webRTCManager?.sendNativeHIDKey(key: key, isDown: event.isKeyDown) == true {
+            return
+        }
+
         let inputEvent = InputEvent(
             type: "keyboard",
             data: [
@@ -961,6 +1003,11 @@ class InputManager: ObservableObject {
     }
     
     private func sendMouseButtonEvent(_ event: MouseButtonEvent) {
+        if webRTCManager?.isNativeHIDReady == true {
+            sendWebRTCMouseButtonEvent(event)
+            return
+        }
+
         if transportMode == .glkvmWebSocket,
            let button = glkvmMouseButtonName(event.button),
            isNormalized(event.position),
@@ -988,6 +1035,18 @@ class InputManager: ObservableObject {
     }
 
     private func sendWebRTCMouseButtonEvent(_ event: MouseButtonEvent) {
+        if let button = glkvmMouseButtonName(event.button),
+           isNormalized(event.position),
+           let webRTCManager {
+            let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
+            _ = webRTCManager.sendNativeHIDMouseMove(x: toX, y: toY)
+            if webRTCManager.sendNativeHIDMouseButton(button: button, isDown: event.isDown) {
+                lastMouseX = toX
+                lastMouseY = toY
+                return
+            }
+        }
+
         let inputEvent = InputEvent(
             type: "mouse-button",
             data: [
@@ -1003,6 +1062,11 @@ class InputManager: ObservableObject {
     }
     
     private func sendMouseMoveEvent(_ event: MouseMoveEvent) {
+        if webRTCManager?.isNativeHIDReady == true {
+            sendWebRTCMouseMoveEvent(event)
+            return
+        }
+
         if transportMode == .glkvmWebSocket, isNormalized(event.position), let ws = glkvmWebSocketClient {
             let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
             Task { @MainActor in
@@ -1026,6 +1090,15 @@ class InputManager: ObservableObject {
     }
 
     private func sendWebRTCMouseMoveEvent(_ event: MouseMoveEvent) {
+        if isNormalized(event.position), let webRTCManager {
+            let (toX, toY) = glkvmAbsolutePoint(fromNormalized: event.position)
+            if webRTCManager.sendNativeHIDMouseMove(x: toX, y: toY) {
+                lastMouseX = toX
+                lastMouseY = toY
+                return
+            }
+        }
+
         let inputEvent = InputEvent(
             type: "mouse-move",
             data: [
@@ -1039,6 +1112,11 @@ class InputManager: ObservableObject {
     }
     
     private func sendMouseScrollEvent(_ event: MouseScrollEvent) {
+        if webRTCManager?.isNativeHIDReady == true {
+            sendWebRTCMouseScrollEvent(event)
+            return
+        }
+
         guard transportMode == .glkvmWebSocket else {
             sendWebRTCMouseScrollEvent(event)
             return
@@ -1165,6 +1243,12 @@ class InputManager: ObservableObject {
     }
 
     private func sendWebRTCMouseScrollEvent(_ event: MouseScrollEvent) {
+        if webRTCManager?.isNativeHIDReady == true,
+           let steps = consumeGLKVMScrollSteps(event),
+           webRTCManager?.sendNativeHIDMouseWheel(deltaX: steps.dx, deltaY: steps.dy) == true {
+            return
+        }
+
         let inputEvent = InputEvent(
             type: "mouse-scroll",
             data: [

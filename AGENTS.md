@@ -56,6 +56,8 @@ Overlook is a macOS 14+ SwiftUI app (AppKit delegate) for controlling GL.iNet GL
 ## Key Patterns
 
 - All managers are `@MainActor` `ObservableObject` singletons instantiated in `AppDelegate` and passed down via SwiftUI environment.
-- Device connections allow insecure TLS (self-signed certs on KVM devices) — both `KVMDeviceManager` and `WebRTCManager` have `URLSessionDelegate` implementations that bypass cert validation when configured.
+- Device connections use system TLS trust by default. Manual connections can
+  explicitly opt a legacy device into untrusted-certificate mode; the policy is
+  persisted per device and shared by API, WebRTC, and direct-H.264 sessions.
 - Audio and video use **separate** WebRTC peer connections to allow independent reconnect and reduce playout latency.
 - Stats from WebRTC receiver reports are surfaced in the window title via a timer loop in `WebRTCManager`.

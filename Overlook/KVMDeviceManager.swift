@@ -3,6 +3,84 @@ import Network
 import Combine
 import CryptoKit
 import SystemConfiguration
+import Security
+
+enum DevicePasswordStore {
+    private static let service = "com.overlook.app.device-passwords"
+
+    struct StorageError: LocalizedError {
+        let status: OSStatus
+        var errorDescription: String? {
+            let detail = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+            return "macOS Keychain: \(detail)"
+        }
+    }
+
+    private static func query(host: String, port: Int, user: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: service,
+         kSecAttrAccount as String: "\(user)@\(host.lowercased()):\(port)"]
+    }
+
+    static func load(host: String, port: Int, user: String) throws -> String? {
+        var attributes = query(host: host, port: port, user: user)
+        attributes[kSecReturnData as String] = true
+        attributes[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(attributes as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else { throw StorageError(status: status) }
+        guard let data = result as? Data, let password = String(data: data, encoding: .utf8) else {
+            throw StorageError(status: errSecDecode)
+        }
+        return password
+    }
+
+    static func save(_ password: String, host: String, port: Int, user: String) throws {
+        let attributes = query(host: host, port: port, user: user)
+        let data = Data(password.utf8)
+        var status = SecItemUpdate(attributes as CFDictionary,
+                                   [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var item = attributes
+            item[kSecValueData as String] = data
+            item[kSecAttrLabel as String] = "Overlook — \(user)@\(host):\(port)"
+            status = SecItemAdd(item as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else { throw StorageError(status: status) }
+    }
+}
+
+enum TLSValidationPolicy: String, Codable, CaseIterable, Hashable {
+    case systemTrust
+    case allowUntrustedLegacy
+
+    var allowsUntrustedCertificates: Bool {
+        self == .allowUntrustedLegacy
+    }
+}
+
+final class TLSURLSessionDelegate: NSObject, URLSessionDelegate {
+    let policy: TLSValidationPolicy
+
+    init(policy: TLSValidationPolicy) {
+        self.policy = policy
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        didReceive challenge: URLAuthenticationChallenge,
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+    ) {
+        guard policy.allowsUntrustedCertificates,
+              challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = challenge.protectionSpace.serverTrust else {
+            completionHandler(.performDefaultHandling, nil)
+            return
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
+}
 
 @MainActor
 final class KVMDeviceManager: NSObject, ObservableObject {
@@ -11,6 +89,7 @@ final class KVMDeviceManager: NSObject, ObservableObject {
     @Published var glkvmClient: GLKVMClient?
     @Published var systemShortcuts: [GLKVMSystemConfigShortcut] = []
     @Published var isScanning = false
+    @Published var credentialStorageError: String?
     @Published var scanProgress: Double = 0.0
     @Published var autoScanEnabled: Bool = false
     
@@ -19,26 +98,15 @@ final class KVMDeviceManager: NSObject, ObservableObject {
     private var shortcutLoadTask: Task<Void, Never>?
     private var deviceDiscoverySessions: [NWBrowser] = []
 
-    private final class InsecureTLSDelegate: NSObject, URLSessionDelegate {
-        func urlSession(
-            _ session: URLSession,
-            didReceive challenge: URLAuthenticationChallenge,
-            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-        ) {
-            if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-               let trust = challenge.protectionSpace.serverTrust {
-                completionHandler(.useCredential, URLCredential(trust: trust))
-                return
-            }
-            completionHandler(.performDefaultHandling, nil)
-        }
-    }
-
     private let probeSession: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 2
         config.timeoutIntervalForResource = 3
-        return URLSession(configuration: config, delegate: InsecureTLSDelegate(), delegateQueue: nil)
+        return URLSession(
+            configuration: config,
+            delegate: TLSURLSessionDelegate(policy: .systemTrust),
+            delegateQueue: nil
+        )
     }()
 
     private static let savedDevicesKey = "overlook.saved_devices.v1"
@@ -57,6 +125,7 @@ final class KVMDeviceManager: NSObject, ObservableObject {
         let type: KVMDeviceType
         let authToken: String
         let capabilities: Set<KVMCapability>
+        let tlsValidationPolicy: TLSValidationPolicy?
     }
     
     override init() {
@@ -846,7 +915,13 @@ final class KVMDeviceManager: NSObject, ObservableObject {
     }
     
     @discardableResult
-    func addManualDevice(host: String, port: Int, type: KVMDeviceType, authToken: String = "") -> KVMDevice {
+    func addManualDevice(
+        host: String,
+        port: Int,
+        type: KVMDeviceType,
+        authToken: String = "",
+        tlsValidationPolicy: TLSValidationPolicy = .systemTrust
+    ) -> KVMDevice {
         let device = KVMDevice(
             id: "manual-\(UUID().uuidString)",
             name: "Manual KVM @ \(host):\(port)",
@@ -854,7 +929,8 @@ final class KVMDeviceManager: NSObject, ObservableObject {
             port: port,
             type: type,
             authToken: authToken,
-            capabilities: [.videoStreaming, .keyboardInput, .mouseInput]
+            capabilities: [.videoStreaming, .keyboardInput, .mouseInput],
+            tlsValidationPolicy: tlsValidationPolicy
         )
         
         availableDevices.append(device)
@@ -920,25 +996,47 @@ final class KVMDeviceManager: NSObject, ObservableObject {
             finalDevice = device
         }
 
-        guard let client = try? GLKVMClient(device: finalDevice, allowInsecureTLS: true) else {
+        guard let client = try? GLKVMClient(device: finalDevice) else {
             OverlookLog.error("GLKVMClient init failed host=\(finalDevice.host) port=\(finalDevice.port)")
             throw KVMError.connectionFailed
         }
         OverlookLog.info("GLKVMClient ready baseURL=\(client.baseURL.absoluteString) tokenLen=\(finalDevice.authToken.count)")
         NSLog("[Overlook connect] %@:%d baseURL=%@ tokenLen=%d", finalDevice.host, finalDevice.port, client.baseURL.absoluteString, finalDevice.authToken.count)
 
+        var requiresLogin = password?.isEmpty == false
         do {
             OverlookLog.info("authCheck start host=\(finalDevice.host) port=\(finalDevice.port)")
             try await client.authCheck()
             OverlookLog.info("authCheck OK host=\(finalDevice.host) port=\(finalDevice.port)")
-            NSLog("[Overlook connect] authCheck OK")
         } catch {
-            OverlookLog.error("authCheck threw host=\(finalDevice.host) port=\(finalDevice.port) error=\(OverlookLog.describe(error))")
-            NSLog("[Overlook connect] authCheck threw: %@", "\(error)")
-            if let password, !password.isEmpty {
+            OverlookLog.error("authCheck failed host=\(finalDevice.host) error=\(OverlookLog.describe(error))")
+            guard let authError = error as? GLKVMClient.ClientError,
+                  case .httpError(let status, _) = authError,
+                  status == 401 || status == 403 else { throw error }
+            requiresLogin = true
+        }
+        if requiresLogin {
+            let suppliedPassword = password.flatMap { $0.isEmpty ? nil : $0 }
+            var loginPassword = suppliedPassword
+            if loginPassword == nil {
                 do {
-                    OverlookLog.info("authLogin start host=\(finalDevice.host) port=\(finalDevice.port) user=\(user) passwordLength=\(password.count)")
-                    let token = try await client.authLogin(user: user, password: password)
+                    loginPassword = try DevicePasswordStore.load(host: finalDevice.host, port: finalDevice.port, user: user)
+                } catch {
+                    credentialStorageError = error.localizedDescription
+                }
+            }
+            if let loginPassword, !loginPassword.isEmpty {
+                do {
+                    OverlookLog.info("authLogin start host=\(finalDevice.host) port=\(finalDevice.port) user=\(user) source=\(suppliedPassword == nil ? "keychain" : "prompt")")
+                    let token = try await client.authLogin(user: user, password: loginPassword)
+                    if suppliedPassword != nil {
+                        do {
+                            try DevicePasswordStore.save(loginPassword, host: finalDevice.host, port: finalDevice.port, user: user)
+                            OverlookLog.info("Device password saved in macOS Keychain host=\(finalDevice.host) port=\(finalDevice.port)")
+                        } catch {
+                            credentialStorageError = error.localizedDescription
+                        }
+                    }
                     var updated = finalDevice
                     if let token, !token.isEmpty {
                         client.authToken = token
@@ -953,6 +1051,11 @@ final class KVMDeviceManager: NSObject, ObservableObject {
                 } catch {
                     OverlookLog.error("authLogin threw host=\(finalDevice.host) port=\(finalDevice.port) error=\(OverlookLog.describe(error))")
                     NSLog("[Overlook connect] authLogin threw: %@", "\(error)")
+                    if suppliedPassword == nil,
+                       let clientError = error as? GLKVMClient.ClientError,
+                       case .authenticationRejected = clientError {
+                        throw KVMError.authenticationFailed
+                    }
                     throw error
                 }
             } else {
@@ -986,6 +1089,14 @@ final class KVMDeviceManager: NSObject, ObservableObject {
                     guard self?.glkvmClient === client else { return }
                     self?.systemShortcuts = config.shortcuts
                 }
+                guard !Task.isCancelled, self?.glkvmClient === client else { return }
+                do {
+                    // Restore the saved preference after a firmware/device restart,
+                    // just as the device WebUI does when its mouse settings mount.
+                    try await client.setHIDParams(["jiggler": config.mouseJiggle ? "true" : "false"])
+                } catch {
+                    OverlookLog.error("Failed to restore mouse jiggle: \(OverlookLog.describe(error))")
+                }
             } catch {
                 OverlookLog.error("Failed to load system shortcuts for menu: \(OverlookLog.describe(error))")
                 await MainActor.run {
@@ -1003,7 +1114,8 @@ final class KVMDeviceManager: NSObject, ObservableObject {
             name: device.name,
             type: device.type,
             authToken: device.authToken,
-            capabilities: device.capabilities
+            capabilities: device.capabilities,
+            tlsValidationPolicy: device.tlsValidationPolicy
         )
 
         var current = readPersistedDevices()
@@ -1035,7 +1147,8 @@ final class KVMDeviceManager: NSObject, ObservableObject {
                 port: record.port,
                 type: record.type,
                 authToken: record.authToken,
-                capabilities: record.capabilities
+                capabilities: record.capabilities,
+                tlsValidationPolicy: record.tlsValidationPolicy ?? .systemTrust
             )
         }
         availableDevices = removeDuplicates(from: devices).sorted { $0.name < $1.name }
@@ -1133,6 +1246,7 @@ struct KVMDevice: Identifiable, Codable {
     var type: KVMDeviceType
     var authToken: String
     let capabilities: Set<KVMCapability>
+    var tlsValidationPolicy: TLSValidationPolicy = .systemTrust
     
     var connectionString: String {
         return "\(host):\(port)"

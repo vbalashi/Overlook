@@ -43,29 +43,6 @@ private actor DirectH264DecodeWorker {
 
 @MainActor
 final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend {
-    private final class SessionDelegate: NSObject, URLSessionDelegate {
-        let allowInsecureTLS: Bool
-
-        init(allowInsecureTLS: Bool) {
-            self.allowInsecureTLS = allowInsecureTLS
-        }
-
-        func urlSession(
-            _ session: URLSession,
-            didReceive challenge: URLAuthenticationChallenge,
-            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-        ) {
-            guard allowInsecureTLS,
-                  challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-                  let trust = challenge.protectionSpace.serverTrust else {
-                completionHandler(.performDefaultHandling, nil)
-                return
-            }
-
-            completionHandler(.useCredential, URLCredential(trust: trust))
-        }
-    }
-
     @Published private(set) var isConnected = false
     @Published private(set) var isConnecting = false
     @Published private(set) var hasEverConnectedToStream = false
@@ -87,7 +64,6 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
 
     let backendKind: VideoPlaybackBackendKind = .directH264
 
-    private let allowInsecureTLS = true
     private var session: URLSession?
     private var webSocketTask: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
@@ -134,7 +110,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         lastDisconnectReason = nil
         await resetCounters()
 
-        let client = try GLKVMClient(device: device, allowInsecureTLS: allowInsecureTLS)
+        let client = try GLKVMClient(device: device)
         let mediaURL = try client.mediaWebsocketURL()
         var request = URLRequest(url: mediaURL)
         request.assumesHTTP3Capable = false
@@ -149,7 +125,7 @@ final class DirectH264Manager: NSObject, ObservableObject, VideoPlaybackBackend 
         config.urlCache = nil
         let session = URLSession(
             configuration: config,
-            delegate: SessionDelegate(allowInsecureTLS: allowInsecureTLS),
+            delegate: TLSURLSessionDelegate(policy: device.tlsValidationPolicy),
             delegateQueue: nil
         )
         let task = session.webSocketTask(with: request)

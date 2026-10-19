@@ -47,27 +47,9 @@ struct InputEvent: Codable {
 #if canImport(WebRTC)
 @MainActor
 class WebRTCManager: NSObject, ObservableObject {
-    private final class SessionDelegate: NSObject, URLSessionDelegate {
-        let allowInsecureTLS: Bool
-
-        init(allowInsecureTLS: Bool) {
-            self.allowInsecureTLS = allowInsecureTLS
-        }
-
-        func urlSession(
-            _ session: URLSession,
-            didReceive challenge: URLAuthenticationChallenge,
-            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-        ) {
-            guard allowInsecureTLS,
-                  challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-                  let trust = challenge.protectionSpace.serverTrust else {
-                completionHandler(.performDefaultHandling, nil)
-                return
-            }
-
-            completionHandler(.useCredential, URLCredential(trust: trust))
-        }
+    enum SignalingMode: String {
+        case janus
+        case native
     }
 
     @Published var videoView: RTCMTLNSVideoView?
@@ -117,6 +99,8 @@ class WebRTCManager: NSObject, ObservableObject {
     @Published var isStreamStalled = false
     @Published var lastDisconnectReason: String?
     @Published var lastVideoFrameAgeSeconds: Int?
+    @Published private(set) var signalingMode: SignalingMode = .janus
+    @Published private(set) var isNativeHIDReady = false
     
     private var peerConnection: RTCPeerConnection?
     private var audioPeerConnection: RTCPeerConnection?
@@ -173,6 +157,7 @@ class WebRTCManager: NSObject, ObservableObject {
 
     private let streamHealthQueue = DispatchQueue(label: "com.overlook.stream-health")
     private var lastVideoFrameTime: CFTimeInterval?
+    private var shouldCaptureVideoFrames = false // Protected by streamHealthQueue.
     private var lastInboundVideoActivityTime: CFTimeInterval?
     private var connectedIceTime: CFTimeInterval?
     private var streamHealthTimer: Timer?
@@ -181,7 +166,6 @@ class WebRTCManager: NSObject, ObservableObject {
     private let initialFrameTimeoutSeconds: CFTimeInterval = 5.0
     private let videoDisconnectedGracePeriodSeconds: TimeInterval = 4.0
     
-    private let allowInsecureTLS = true
     private var signalingSession: URLSession?
     private var webSocketTask: URLSessionWebSocketTask?
     private var signalingListenTask: Task<Void, Never>?
@@ -192,6 +176,19 @@ class WebRTCManager: NSObject, ObservableObject {
     private var janusAudioHandleId: Int?
     private var janusKeepAliveTimer: Timer?
     private var janusWaiters: [String: CheckedContinuation<[String: Any], Error>] = [:]
+
+    private var nativeSessionId: Any?
+    private var nativePendingCandidates: [RTCIceCandidate] = []
+    private var nativeKeepAliveTimer: Timer?
+    private var nativeReadyWaiter: CheckedContinuation<Void, Error>?
+    private var nativeReadyTimeoutTask: Task<Void, Never>?
+
+    private var nativeHIDPeerConnection: RTCPeerConnection?
+    private var nativeHIDSession: URLSession?
+    private var nativeHIDWebSocketTask: URLSessionWebSocketTask?
+    private var nativeHIDListenTask: Task<Void, Never>?
+    private var nativeHIDGeneration: Int = 0
+    private var nativeHIDPendingCandidates: [RTCIceCandidate] = []
 
     private var isFrameCaptureEnabled: Bool = false
     private enum FrameCaptureReason: Hashable {
@@ -508,44 +505,34 @@ class WebRTCManager: NSObject, ObservableObject {
             if videoView == nil {
                 videoView = RTCMTLNSVideoView(frame: .zero)
             }
-            
+
+            let preference = await resolveSignalingPreference(for: device)
+            signalingMode = preference.mode
             let configuration = await makeRTCConfiguration(for: device)
-            
-            let constraints = RTCMediaConstraints(
-                mandatoryConstraints: nil,
-                optionalConstraints: ["OfferToReceiveVideo": "true"]
-            )
-            
-            peerConnection = factory.peerConnection(
-                with: configuration,
-                constraints: constraints,
-                delegate: self
-            )
 
-            if audioEnabled || micEnabled {
-                let audioConstraints = RTCMediaConstraints(
-                    mandatoryConstraints: nil,
-                    optionalConstraints: ["OfferToReceiveAudio": "true", "OfferToReceiveVideo": "false"]
-                )
-                audioPeerConnection = factory.peerConnection(
-                    with: configuration,
-                    constraints: audioConstraints,
-                    delegate: self
-                )
-            }
+            try await preparePeerConnections(factory: factory, configuration: configuration, mode: preference.mode)
 
-            if micEnabled {
-                let granted = await ensureMicrophoneAccess()
-                if granted {
-                    setupLocalMicrophoneTrackIfNeeded(factory: factory, peerConnection: audioPeerConnection ?? peerConnection)
+            do {
+                switch preference.mode {
+                case .janus:
+                    try await connectToSignalingServer(device: device)
+                case .native:
+                    try await connectToNativeSignalingServer(device: device, orientation: preference.orientation)
                 }
+            } catch {
+                guard preference.mode == .native else { throw error }
+
+                OverlookLog.error("Native WebRTC negotiation failed; falling back to Janus error=\(OverlookLog.describe(error))")
+                resetSignalingTransport()
+                teardownPeerConnectionsForFallback()
+                signalingMode = .janus
+                try await preparePeerConnections(factory: factory, configuration: configuration, mode: .janus)
+                try await connectToSignalingServer(device: device)
             }
-            
-            // Setup data channel for input events
-            setupDataChannel()
-            
-            // Connect to signaling server
-            try await connectToSignalingServer(device: device)
+
+            if preference.usesStandaloneHID {
+                startNativeHIDSession(device: device, configuration: configuration)
+            }
             
             // Start connection quality monitoring
             startLatencyMonitoring()
@@ -558,12 +545,97 @@ class WebRTCManager: NSObject, ObservableObject {
         }
     }
 
+    private func resolveSignalingPreference(for device: KVMDevice) async -> (mode: SignalingMode, orientation: Int, usesStandaloneHID: Bool) {
+        do {
+            let client = try GLKVMClient(device: device)
+            let config = try await client.getSystemConfig()
+            let mode: SignalingMode
+#if DEBUG
+            if let override = ProcessInfo.processInfo.environment["OVERLOOK_WEBRTC_SIGNALING_MODE"],
+               let overriddenMode = SignalingMode(rawValue: override) {
+                mode = overriddenMode
+                OverlookLog.info("WebRTC signaling debug override mode=\(mode.rawValue)")
+            } else {
+                mode = config.videoMode == "gl_webrtc" ? .native : .janus
+            }
+#else
+            mode = config.videoMode == "gl_webrtc" ? .native : .janus
+#endif
+            OverlookLog.info("WebRTC signaling selected mode=\(mode.rawValue) deviceVideoMode=\(config.videoMode)")
+            return (mode, config.orientation, mode == .native || config.videoMode != "flex_fec")
+        } catch {
+            OverlookLog.error("Could not resolve device video mode; using Janus error=\(OverlookLog.describe(error))")
+            return (.janus, 0, false)
+        }
+    }
+
+    private func preparePeerConnections(
+        factory: RTCPeerConnectionFactory,
+        configuration: RTCConfiguration,
+        mode: SignalingMode
+    ) async throws {
+        let constraints = RTCMediaConstraints(
+            mandatoryConstraints: nil,
+            optionalConstraints: mode == .janus ? ["OfferToReceiveVideo": "true"] : nil
+        )
+
+        guard let videoPeerConnection = factory.peerConnection(
+            with: configuration,
+            constraints: constraints,
+            delegate: self
+        ) else {
+            throw WebRTCError.factoryNotInitialized
+        }
+        peerConnection = videoPeerConnection
+
+        if mode == .native {
+            let videoInit = RTCRtpTransceiverInit()
+            videoInit.direction = .recvOnly
+            guard videoPeerConnection.addTransceiver(of: .video, init: videoInit) != nil else {
+                throw WebRTCError.signalingConnectionLost
+            }
+
+            if micEnabled {
+                let granted = await ensureMicrophoneAccess()
+                if granted {
+                    setupLocalMicrophoneTrackIfNeeded(factory: factory, peerConnection: videoPeerConnection)
+                }
+            } else if audioEnabled {
+                let audioInit = RTCRtpTransceiverInit()
+                audioInit.direction = .recvOnly
+                _ = videoPeerConnection.addTransceiver(of: .audio, init: audioInit)
+            }
+            return
+        }
+
+        if audioEnabled || micEnabled {
+            let audioConstraints = RTCMediaConstraints(
+                mandatoryConstraints: nil,
+                optionalConstraints: ["OfferToReceiveAudio": "true", "OfferToReceiveVideo": "false"]
+            )
+            audioPeerConnection = factory.peerConnection(
+                with: configuration,
+                constraints: audioConstraints,
+                delegate: self
+            )
+        }
+
+        if micEnabled {
+            let granted = await ensureMicrophoneAccess()
+            if granted {
+                setupLocalMicrophoneTrackIfNeeded(factory: factory, peerConnection: audioPeerConnection ?? videoPeerConnection)
+            }
+        }
+
+        setupDataChannel()
+    }
+
     private func makeRTCConfiguration(for device: KVMDevice) async -> RTCConfiguration {
         let configuration = RTCConfiguration()
         configuration.sdpSemantics = .unifiedPlan
 
         do {
-            let client = try GLKVMClient(device: device, allowInsecureTLS: allowInsecureTLS)
+            let client = try GLKVMClient(device: device)
             let credentials = try await client.getTurnCredentials()
             if credentials.uris.isEmpty == false {
                 configuration.iceServers = [
@@ -722,13 +794,13 @@ class WebRTCManager: NSObject, ObservableObject {
             return
         }
 
-        let shouldAttach = !frameCaptureReasons.isEmpty
-        if shouldAttach, !isFrameRendererAttached {
+        let shouldCapture = !frameCaptureReasons.isEmpty
+        streamHealthQueue.sync { shouldCaptureVideoFrames = shouldCapture }
+        // Keep a lightweight observer attached for frame health and video size.
+        // Copy pixel buffers only while OCR or a screenshot actually needs them.
+        if !isFrameRendererAttached {
             videoTrack.add(self)
             isFrameRendererAttached = true
-        } else if !shouldAttach, isFrameRendererAttached {
-            videoTrack.remove(self)
-            isFrameRendererAttached = false
         }
     }
     
@@ -819,7 +891,11 @@ class WebRTCManager: NSObject, ObservableObject {
         OverlookLog.info("WebRTC signaling connect url=\(OverlookLog.redactedURL(url)) host=\(device.host) port=\(device.port)")
 
         let config = URLSessionConfiguration.default
-        let session = URLSession(configuration: config, delegate: SessionDelegate(allowInsecureTLS: allowInsecureTLS), delegateQueue: nil)
+        let session = URLSession(
+            configuration: config,
+            delegate: TLSURLSessionDelegate(policy: device.tlsValidationPolicy),
+            delegateQueue: nil
+        )
         signalingSession = session
 
         var request = URLRequest(url: url)
@@ -936,6 +1012,355 @@ class WebRTCManager: NSObject, ObservableObject {
         startJanusKeepAlive()
     }
 
+    private func connectToNativeSignalingServer(device: KVMDevice, orientation: Int) async throws {
+        var components = URLComponents()
+        components.scheme = (device.port == 80 || device.port == 8080) ? "ws" : "wss"
+        components.host = device.host
+        components.port = device.port
+        components.path = "/lws/ws"
+        if !device.authToken.isEmpty {
+            components.queryItems = [URLQueryItem(name: "auth_token", value: device.authToken)]
+        }
+        guard let url = components.url else {
+            throw WebRTCError.invalidSignalingURL
+        }
+
+        OverlookLog.info("Native WebRTC signaling connect url=\(OverlookLog.redactedURL(url)) host=\(device.host) port=\(device.port)")
+
+        let session = URLSession(
+            configuration: .default,
+            delegate: TLSURLSessionDelegate(policy: device.tlsValidationPolicy),
+            delegateQueue: nil
+        )
+        signalingSession = session
+
+        var request = URLRequest(url: url)
+        let originScheme = (device.port == 80 || device.port == 8080) ? "http" : "https"
+        let defaultOriginPort = originScheme == "https" ? 443 : 80
+        let originPort = device.port == defaultOriginPort ? "" : ":\(device.port)"
+        request.setValue("\(originScheme)://\(device.host)\(originPort)", forHTTPHeaderField: "Origin")
+
+        let socket = session.webSocketTask(with: request)
+        webSocketTask = socket
+        socket.resume()
+
+        signalingGeneration += 1
+        let generation = signalingGeneration
+        signalingListenTask?.cancel()
+        signalingListenTask = Task { [weak self] in
+            await self?.listenForSignalingMessages(generation: generation)
+        }
+
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            nativeReadyWaiter = continuation
+            nativeReadyTimeoutTask?.cancel()
+            nativeReadyTimeoutTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self?.finishNativeNegotiation(.failure(WebRTCError.signalingConnectionLost))
+                }
+            }
+
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                do {
+                    try await self.sendNativeMessage(
+                        ["type": "create", "orientation": orientation],
+                        includeSessionId: false
+                    )
+                } catch {
+                    self.finishNativeNegotiation(.failure(error))
+                }
+            }
+        }
+    }
+
+    private func sendNativeMessage(_ message: [String: Any], includeSessionId: Bool = true) async throws {
+        var payload = message
+        if includeSessionId, let nativeSessionId {
+            payload["id"] = nativeSessionId
+        }
+        try await sendJanusMessage(payload)
+    }
+
+    private func finishNativeNegotiation(_ result: Result<Void, Error>) {
+        nativeReadyTimeoutTask?.cancel()
+        nativeReadyTimeoutTask = nil
+        guard let waiter = nativeReadyWaiter else { return }
+        nativeReadyWaiter = nil
+        switch result {
+        case .success:
+            waiter.resume()
+        case .failure(let error):
+            waiter.resume(throwing: error)
+        }
+    }
+
+    private func handleNativeMessage(_ message: [String: Any]) async {
+        guard let type = message["type"] as? String else { return }
+
+        switch type {
+        case "id":
+            guard let id = message["id"] else {
+                finishNativeNegotiation(.failure(WebRTCError.signalingConnectionLost))
+                return
+            }
+            nativeSessionId = id
+            startNativeKeepAlive()
+            await createAndSendNativeOffer()
+
+        case "answer":
+            guard let sdp = message["sdp"] as? String, let peerConnection else {
+                finishNativeNegotiation(.failure(WebRTCError.signalingConnectionLost))
+                return
+            }
+            do {
+                try await peerConnection.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: sdp))
+                for candidate in nativePendingCandidates {
+                    try? await peerConnection.add(candidate)
+                }
+                nativePendingCandidates.removeAll()
+                finishNativeNegotiation(.success(()))
+            } catch {
+                finishNativeNegotiation(.failure(error))
+            }
+
+        case "ice":
+            guard let candidateString = message["candidate"] as? String else { return }
+            let lineIndex = (message["sdpMLineIndex"] as? NSNumber)?.int32Value ?? 0
+            let candidate = RTCIceCandidate(
+                sdp: candidateString,
+                sdpMLineIndex: lineIndex,
+                sdpMid: message["sdpMid"] as? String
+            )
+            if let peerConnection, peerConnection.remoteDescription != nil {
+                try? await peerConnection.add(candidate)
+            } else {
+                nativePendingCandidates.append(candidate)
+            }
+
+        default:
+            break
+        }
+    }
+
+    private func createAndSendNativeOffer() async {
+        guard let peerConnection else {
+            finishNativeNegotiation(.failure(WebRTCError.signalingConnectionLost))
+            return
+        }
+
+        do {
+            let offer = try await peerConnection.offer(
+                for: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+            )
+            try await peerConnection.setLocalDescription(offer)
+            try await sendNativeMessage(["type": "offer", "sdp": offer.sdp])
+        } catch {
+            finishNativeNegotiation(.failure(error))
+        }
+    }
+
+    private func startNativeKeepAlive() {
+        nativeKeepAliveTimer?.invalidate()
+        nativeKeepAliveTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                try? await self.sendNativeMessage(["type": "ping"])
+            }
+        }
+    }
+
+    private func startNativeHIDSession(device: KVMDevice, configuration: RTCConfiguration) {
+        stopNativeHIDSession()
+
+        var components = URLComponents()
+        components.scheme = (device.port == 80 || device.port == 8080) ? "ws" : "wss"
+        components.host = device.host
+        components.port = device.port
+        components.path = "/pion/ws"
+        if !device.authToken.isEmpty {
+            components.queryItems = [URLQueryItem(name: "auth_token", value: device.authToken)]
+        }
+        guard let url = components.url else {
+            OverlookLog.error("Native HID signaling URL is invalid")
+            return
+        }
+
+        let session = URLSession(
+            configuration: .default,
+            delegate: TLSURLSessionDelegate(policy: device.tlsValidationPolicy),
+            delegateQueue: nil
+        )
+        nativeHIDSession = session
+
+        var request = URLRequest(url: url)
+        let originScheme = (device.port == 80 || device.port == 8080) ? "http" : "https"
+        let defaultOriginPort = originScheme == "https" ? 443 : 80
+        let originPort = device.port == defaultOriginPort ? "" : ":\(device.port)"
+        request.setValue("\(originScheme)://\(device.host)\(originPort)", forHTTPHeaderField: "Origin")
+
+        let socket = session.webSocketTask(with: request)
+        nativeHIDWebSocketTask = socket
+        socket.resume()
+
+        nativeHIDGeneration += 1
+        let generation = nativeHIDGeneration
+        nativeHIDListenTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.sendNativeHIDSignalingMessage([
+                    "type": "config",
+                    "video": false,
+                    "speaker": false,
+                    "mic": false,
+                    "hid": true,
+                ])
+                await self.listenForNativeHIDMessages(generation: generation, configuration: configuration)
+            } catch {
+                guard generation == self.nativeHIDGeneration, !Task.isCancelled else { return }
+                OverlookLog.error("Native HID signaling failed error=\(OverlookLog.describe(error))")
+            }
+        }
+
+        OverlookLog.info("Native HID signaling connect url=\(OverlookLog.redactedURL(url)) host=\(device.host) port=\(device.port)")
+    }
+
+    private func listenForNativeHIDMessages(generation: Int, configuration: RTCConfiguration) async {
+        while !Task.isCancelled,
+              generation == nativeHIDGeneration,
+              let socket = nativeHIDWebSocketTask {
+            do {
+                let message = try await socket.receive()
+                guard generation == nativeHIDGeneration else { break }
+                let data: Data
+                switch message {
+                case .string(let value):
+                    guard let encoded = value.data(using: .utf8) else { continue }
+                    data = encoded
+                case .data(let value):
+                    data = value
+                @unknown default:
+                    continue
+                }
+                guard let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    continue
+                }
+                await handleNativeHIDMessage(payload, configuration: configuration)
+            } catch {
+                guard generation == nativeHIDGeneration, !Task.isCancelled else { break }
+                OverlookLog.error("Native HID WebSocket receive failed error=\(OverlookLog.describe(error))")
+                break
+            }
+        }
+    }
+
+    private func handleNativeHIDMessage(_ message: [String: Any], configuration: RTCConfiguration) async {
+        guard let type = message["type"] as? String else { return }
+
+        switch type {
+        case "offer":
+            guard let encodedSDP = message["sdp"] as? String,
+                  let descriptionData = Data(base64Encoded: encodedSDP),
+                  let description = try? JSONSerialization.jsonObject(with: descriptionData) as? [String: Any],
+                  let sdp = description["sdp"] as? String,
+                  let factory else {
+                OverlookLog.error("Native HID offer is malformed")
+                return
+            }
+
+            nativeHIDPeerConnection?.close()
+            guard let hidPeerConnection = factory.peerConnection(
+                with: configuration,
+                constraints: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil),
+                delegate: self
+            ) else {
+                OverlookLog.error("Native HID peer connection could not be created")
+                return
+            }
+            nativeHIDPeerConnection = hidPeerConnection
+
+            let channelConfiguration = RTCDataChannelConfiguration()
+            channelConfiguration.isNegotiated = true
+            channelConfiguration.channelId = 1
+            channelConfiguration.isOrdered = true
+            dataChannel?.close()
+            dataChannel = hidPeerConnection.dataChannel(forLabel: "hid", configuration: channelConfiguration)
+            dataChannel?.delegate = self
+
+            do {
+                try await hidPeerConnection.setRemoteDescription(
+                    RTCSessionDescription(type: .offer, sdp: sdp)
+                )
+                for candidate in nativeHIDPendingCandidates {
+                    try? await hidPeerConnection.add(candidate)
+                }
+                nativeHIDPendingCandidates.removeAll()
+
+                let answer = try await hidPeerConnection.answer(
+                    for: RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+                )
+                try await hidPeerConnection.setLocalDescription(answer)
+                let answerObject: [String: Any] = ["type": "answer", "sdp": answer.sdp]
+                let answerData = try JSONSerialization.data(withJSONObject: answerObject)
+                try await sendNativeHIDSignalingMessage([
+                    "type": "answer",
+                    "sdp": answerData.base64EncodedString(),
+                ])
+            } catch {
+                OverlookLog.error("Native HID offer handling failed error=\(OverlookLog.describe(error))")
+            }
+
+        case "candidate":
+            guard let candidateString = message["candidate"] as? String else { return }
+            let lineIndex = (message["sdpMLineIndex"] as? NSNumber)?.int32Value ?? 0
+            let candidate = RTCIceCandidate(
+                sdp: candidateString,
+                sdpMLineIndex: lineIndex,
+                sdpMid: message["sdpMid"] as? String
+            )
+            if let nativeHIDPeerConnection, nativeHIDPeerConnection.remoteDescription != nil {
+                try? await nativeHIDPeerConnection.add(candidate)
+            } else {
+                nativeHIDPendingCandidates.append(candidate)
+            }
+
+        case "server-ice-complete":
+            break
+
+        default:
+            break
+        }
+    }
+
+    private func sendNativeHIDSignalingMessage(_ payload: [String: Any]) async throws {
+        guard let nativeHIDWebSocketTask else {
+            throw WebRTCError.signalingConnectionLost
+        }
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw WebRTCError.signalingConnectionLost
+        }
+        try await nativeHIDWebSocketTask.send(.string(string))
+    }
+
+    private func stopNativeHIDSession() {
+        isNativeHIDReady = false
+        nativeHIDGeneration += 1
+        nativeHIDListenTask?.cancel()
+        nativeHIDListenTask = nil
+        nativeHIDWebSocketTask?.cancel()
+        nativeHIDWebSocketTask = nil
+        nativeHIDSession?.invalidateAndCancel()
+        nativeHIDSession = nil
+        nativeHIDPendingCandidates.removeAll()
+        nativeHIDPeerConnection?.close()
+        nativeHIDPeerConnection = nil
+        dataChannel?.close()
+        dataChannel = nil
+    }
+
     private func startJanusKeepAlive() {
         janusKeepAliveTimer?.invalidate()
         janusKeepAliveTimer = Timer.scheduledTimer(withTimeInterval: 25.0, repeats: true) { [weak self] _ in
@@ -1038,6 +1463,9 @@ class WebRTCManager: NSObject, ObservableObject {
             } catch {
                 guard generation == signalingGeneration, !Task.isCancelled else { break }
                 print("WebSocket receive error: \(error)")
+                if signalingMode == .native {
+                    finishNativeNegotiation(.failure(error))
+                }
                 isConnecting = false
                 if isConnected || hasEverConnectedToStream || lastDisconnectReason == nil {
                     lastDisconnectReason = "Signaling connection lost"
@@ -1057,14 +1485,22 @@ class WebRTCManager: NSObject, ObservableObject {
                 return
             }
 
-            await handleJanusMessage(signalingMessage)
+            if signalingMode == .native {
+                await handleNativeMessage(signalingMessage)
+            } else {
+                await handleJanusMessage(signalingMessage)
+            }
             
         case .data(let data):
             guard let signalingMessage = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return
             }
 
-            await handleJanusMessage(signalingMessage)
+            if signalingMode == .native {
+                await handleNativeMessage(signalingMessage)
+            } else {
+                await handleJanusMessage(signalingMessage)
+            }
             
         @unknown default:
             break
@@ -1214,13 +1650,8 @@ class WebRTCManager: NSObject, ObservableObject {
                 }
 
                 let lastFrame = self.getLastVideoFrameTime()
-                let lastStatsActivity = self.lastInboundVideoActivityTime
-                let lastActivity: CFTimeInterval?
-                if let lastFrame, let lastStatsActivity {
-                    lastActivity = max(lastFrame, lastStatsActivity)
-                } else {
-                    lastActivity = lastFrame ?? lastStatsActivity
-                }
+                // Incoming RTP can continue while decoding/rendering is stuck.
+                let lastActivity = lastFrame
 
                 let age = lastActivity.map { now - $0 }
 
@@ -1307,12 +1738,13 @@ class WebRTCManager: NSObject, ObservableObject {
 
         var currentRoundTripTimeSeconds: Double?
 
+        let selectedPairID = report.statistics.values.first(where: { $0.type == "transport" })?.values["selectedCandidatePairId"] as? String
         for statistic in report.statistics.values {
             if statistic.type == "candidate-pair" {
                 let selected = (statistic.values["selected"] as? Bool)
                     ?? (numberValue(statistic.values["selected"])?.boolValue)
                     ?? false
-                guard selected else { continue }
+                guard selected || statistic.id == selectedPairID else { continue }
 
                 if let rtt = numberValue(statistic.values["currentRoundTripTime"])?.doubleValue {
                     currentRoundTripTimeSeconds = rtt
@@ -1347,7 +1779,6 @@ class WebRTCManager: NSObject, ObservableObject {
                 packetsLost = n.intValue
             }
 
-            break
         }
 
         let now = Date().timeIntervalSince1970
@@ -1451,7 +1882,8 @@ class WebRTCManager: NSObject, ObservableObject {
             self.sessionVideoBytesReceived = bytesReceived
         }
 
-        guard let audioPeerConnection else {
+        let audioStatsConnection = audioPeerConnection ?? (signalingMode == .native ? peerConnection : nil)
+        guard let audioStatsConnection else {
             await MainActor.run {
                 self.lastInboundAudioBytesReceived = nil
                 self.lastInboundAudioBytesTimestamp = nil
@@ -1471,7 +1903,7 @@ class WebRTCManager: NSObject, ObservableObject {
         let lastAudioBytes = lastInboundAudioBytesReceived
         let lastAudioTs = lastInboundAudioBytesTimestamp
 
-        let audioReport = await audioPeerConnection.statistics()
+        let audioReport = await audioStatsConnection.statistics()
         func audioNumberValue(_ any: Any?) -> NSNumber? {
             any as? NSNumber
         }
@@ -1484,12 +1916,13 @@ class WebRTCManager: NSObject, ObservableObject {
         var audioCurrentRoundTripTimeSeconds: Double?
         var audioBytesSent: Int64?
 
+        let audioSelectedPairID = audioReport.statistics.values.first(where: { $0.type == "transport" })?.values["selectedCandidatePairId"] as? String
         for statistic in audioReport.statistics.values {
             if statistic.type == "candidate-pair" {
                 let selected = (statistic.values["selected"] as? Bool)
                     ?? (audioNumberValue(statistic.values["selected"])?.boolValue)
                     ?? false
-                guard selected else { continue }
+                guard selected || statistic.id == audioSelectedPairID else { continue }
 
                 if let rtt = audioNumberValue(statistic.values["currentRoundTripTime"])?.doubleValue {
                     audioCurrentRoundTripTimeSeconds = rtt
@@ -1629,9 +2062,115 @@ class WebRTCManager: NSObject, ObservableObject {
         let buffer = RTCDataBuffer(data: data, isBinary: true)
         dataChannel.sendData(buffer)
     }
-    
-    func disconnect() {
+
+    @discardableResult
+    func sendNativeHIDKey(key: String, isDown: Bool) -> Bool {
+        sendNativeHIDPayload(Data([1, isDown ? 1 : 0]) + Data(key.utf8))
+    }
+
+    @discardableResult
+    func sendNativeHIDMouseButton(button: String, isDown: Bool) -> Bool {
+        sendNativeHIDPayload(Data([2, isDown ? 1 : 0]) + Data(button.utf8))
+    }
+
+    @discardableResult
+    func sendNativeHIDMouseMove(x: Int, y: Int) -> Bool {
+        // GLKVM uses signed HID coordinates; preserve their two's-complement
+        // representation on the wire (negative coordinates are the top/left half).
+        let clampedX = UInt16(bitPattern: Int16(clamping: x))
+        let clampedY = UInt16(bitPattern: Int16(clamping: y))
+        return sendNativeHIDPayload(Data([
+            3,
+            UInt8((clampedX >> 8) & 0xff),
+            UInt8(clampedX & 0xff),
+            UInt8((clampedY >> 8) & 0xff),
+            UInt8(clampedY & 0xff),
+        ]))
+    }
+
+    @discardableResult
+    func sendNativeHIDMouseWheel(deltaX: Int, deltaY: Int, squash: Bool = false) -> Bool {
+        sendNativeHIDDeltaPayload(type: 5, deltaX: deltaX, deltaY: deltaY, squash: squash)
+    }
+
+    private func sendNativeHIDDeltaPayload(type: UInt8, deltaX: Int, deltaY: Int, squash: Bool) -> Bool {
+        let dx = Int8(clamping: deltaX)
+        let dy = Int8(clamping: deltaY)
+        return sendNativeHIDPayload(Data([
+            type,
+            squash ? 1 : 0,
+            UInt8(bitPattern: dx),
+            UInt8(bitPattern: dy),
+        ]))
+    }
+
+    private func sendNativeHIDPayload(_ data: Data) -> Bool {
+        guard nativeHIDPeerConnection != nil,
+              let dataChannel,
+              dataChannel.readyState == .open else {
+            return false
+        }
+        return dataChannel.sendData(RTCDataBuffer(data: data, isBinary: true))
+    }
+
+    private func resetSignalingTransport() {
         signalingGeneration += 1
+
+        stopNativeHIDSession()
+
+        janusKeepAliveTimer?.invalidate()
+        janusKeepAliveTimer = nil
+        nativeKeepAliveTimer?.invalidate()
+        nativeKeepAliveTimer = nil
+
+        nativeReadyTimeoutTask?.cancel()
+        nativeReadyTimeoutTask = nil
+        finishNativeNegotiation(.failure(WebRTCError.signalingConnectionLost))
+        nativeSessionId = nil
+        nativePendingCandidates.removeAll()
+
+        janusSessionId = nil
+        janusHandleId = nil
+        janusAudioHandleId = nil
+        let waiters = janusWaiters
+        janusWaiters.removeAll()
+        for (_, waiter) in waiters {
+            waiter.resume(throwing: WebRTCError.signalingConnectionLost)
+        }
+
+        signalingListenTask?.cancel()
+        signalingListenTask = nil
+        webSocketTask?.cancel()
+        webSocketTask = nil
+        signalingSession?.invalidateAndCancel()
+        signalingSession = nil
+    }
+
+    private func teardownPeerConnectionsForFallback() {
+        dataChannel?.close()
+        dataChannel = nil
+
+        if let videoTrack {
+            if let videoView {
+                videoTrack.remove(videoView)
+            }
+            if isFrameRendererAttached {
+                videoTrack.remove(self)
+            }
+        }
+        isFrameRendererAttached = false
+        videoTrack = nil
+        remoteAudioTrack = nil
+
+        peerConnection?.close()
+        peerConnection = nil
+        audioPeerConnection?.close()
+        audioPeerConnection = nil
+        localAudioSender = nil
+        localAudioTrack = nil
+    }
+
+    func disconnect() {
         autoReconnectGeneration += 1
         autoReconnectTask?.cancel()
         autoReconnectTask = nil
@@ -1643,25 +2182,7 @@ class WebRTCManager: NSObject, ObservableObject {
         streamHealthTimer?.invalidate()
         streamHealthTimer = nil
 
-        janusKeepAliveTimer?.invalidate()
-        janusKeepAliveTimer = nil
-        janusSessionId = nil
-        janusHandleId = nil
-        janusAudioHandleId = nil
-        let waiters = janusWaiters
-        janusWaiters.removeAll()
-        for (_, waiter) in waiters {
-            waiter.resume(throwing: WebRTCError.signalingConnectionLost)
-        }
-        
-        signalingListenTask?.cancel()
-        signalingListenTask = nil
-
-        webSocketTask?.cancel()
-        webSocketTask = nil
-
-        signalingSession?.invalidateAndCancel()
-        signalingSession = nil
+        resetSignalingTransport()
         
         dataChannel?.close()
         dataChannel = nil
@@ -1793,6 +2314,11 @@ extension WebRTCManager: @preconcurrency RTCPeerConnectionDelegate {
     
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCIceConnectionState) {
         Task { @MainActor in
+            if peerConnection === self.nativeHIDPeerConnection {
+                OverlookLog.info("Native HID ICE connection state changed: \(stateChanged)")
+                return
+            }
+
             // Drive UI connection state from the video peer connection only.
             // Audio may connect/disconnect independently when split into a separate PeerConnection.
             guard peerConnection === self.peerConnection else {
@@ -1836,6 +2362,13 @@ extension WebRTCManager: @preconcurrency RTCPeerConnectionDelegate {
             print("ICE gathering state changed: \(stateChanged)")
 
             if stateChanged == .complete {
+                if peerConnection === self.nativeHIDPeerConnection {
+                    try? await self.sendNativeHIDSignalingMessage(["type": "client-ice-complete"])
+                    return
+                }
+                if self.signalingMode == .native {
+                    return
+                }
                 do {
                     if peerConnection === self.audioPeerConnection {
                         if let handleId = self.janusAudioHandleId {
@@ -1856,6 +2389,24 @@ extension WebRTCManager: @preconcurrency RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
         Task { @MainActor in
             do {
+                if peerConnection === self.nativeHIDPeerConnection {
+                    try await self.sendNativeHIDSignalingMessage([
+                        "type": "candidate",
+                        "candidate": candidate.sdp,
+                        "sdpMid": candidate.sdpMid ?? "",
+                        "sdpMLineIndex": Int(candidate.sdpMLineIndex),
+                    ])
+                    return
+                }
+                if self.signalingMode == .native {
+                    try await sendNativeMessage([
+                        "type": "ice",
+                        "candidate": candidate.sdp,
+                        "sdpMid": candidate.sdpMid ?? "",
+                        "sdpMLineIndex": Int(candidate.sdpMLineIndex),
+                    ])
+                    return
+                }
                 if peerConnection === self.audioPeerConnection {
                     if let handleId = self.janusAudioHandleId {
                         try await sendJanusTrickleCandidate(candidate, handleId: handleId)
@@ -1904,6 +2455,9 @@ extension WebRTCManager: @preconcurrency RTCPeerConnectionDelegate {
 extension WebRTCManager: @preconcurrency RTCDataChannelDelegate {
     func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {
         Task { @MainActor in
+            if dataChannel === self.dataChannel, self.nativeHIDPeerConnection != nil {
+                self.isNativeHIDReady = dataChannel.readyState == .open
+            }
             print("Data channel state changed: \(dataChannel.readyState)")
             OverlookLog.info("Data channel state changed: \(dataChannel.readyState)")
         }
@@ -1944,6 +2498,7 @@ extension WebRTCManager: @preconcurrency RTCVideoRenderer {
         let now = CACurrentMediaTime()
 
         setLastVideoFrameTime(now)
+        guard streamHealthQueue.sync(execute: { shouldCaptureVideoFrames }) else { return }
 
         let minInterval: CFTimeInterval = 1.0 / 12.0
         if now - lastFrameCaptureTime < minInterval {
@@ -2066,6 +2621,11 @@ struct InputMessage: Codable {
 
 @MainActor
 final class WebRTCManager: NSObject, ObservableObject {
+    enum SignalingMode: String {
+        case janus
+        case native
+    }
+
     @Published var isConnected = false
     @Published var isConnecting = false
     @Published var hasEverConnectedToStream = false
@@ -2103,6 +2663,8 @@ final class WebRTCManager: NSObject, ObservableObject {
     }
     @Published var audioOutputMuted: Bool = false
     @Published var microphoneMuted: Bool = false
+    @Published private(set) var signalingMode: SignalingMode = .janus
+    @Published private(set) var isNativeHIDReady = false
 
     private static let audioEnabledDefaultsKey = "overlook.audio.enabled"
     private static let micEnabledDefaultsKey = "overlook.audio.micEnabled"
@@ -2137,6 +2699,18 @@ final class WebRTCManager: NSObject, ObservableObject {
     
     func sendInputEvent(_ event: InputEvent) {
     }
+
+    @discardableResult
+    func sendNativeHIDKey(key: String, isDown: Bool) -> Bool { false }
+
+    @discardableResult
+    func sendNativeHIDMouseButton(button: String, isDown: Bool) -> Bool { false }
+
+    @discardableResult
+    func sendNativeHIDMouseMove(x: Int, y: Int) -> Bool { false }
+
+    @discardableResult
+    func sendNativeHIDMouseWheel(deltaX: Int, deltaY: Int, squash: Bool = false) -> Bool { false }
     
     func disconnect() {
         isConnected = false

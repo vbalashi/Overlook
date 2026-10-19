@@ -49,7 +49,11 @@ Returns the current connection state of the KVM device.
 
 ### `POST /type`
 
-Types a string of text on the remote machine using HID keyboard emulation. Supports Unicode and multi-line text.
+Types text on the remote machine using HID keyboard emulation. Multi-line text and whitespace are preserved. Characters must be supported by the device keymap and the remote keyboard layout; arbitrary Unicode is not guaranteed.
+
+Text is sent sequentially in bounded UTF-8 chunks, with the firmware truncation limit disabled. The response waits for every chunk to finish. There is no overall character limit in the typing client; the Agent HTTP API accepts JSON bodies up to 16 MiB and requires `Content-Length` (chunked transfer encoding is unsupported). Use a sufficiently long caller timeout for large pastes. A failure stops further chunks and returns an error; do not automatically retry the entire text, since an earlier portion may already have been typed.
+
+`ok: true` means the device completed the typing requests. It does not verify the receiving application or saved file; check the screen or file contents when exact delivery matters.
 
 **Request body**
 ```json
@@ -57,6 +61,17 @@ Types a string of text on the remote machine using HID keyboard emulation. Suppo
   "text": "Hello, World!"
 }
 ```
+
+Optional fields: `speed` is `slow`, `balanced`, `fast`, or `turbo` and defaults to the saved **Keyboard settings → Paste speed** setting. `slow: true/false` is an explicit compatibility override selecting slow/fast. The same options are available on MCP `type_text`.
+
+| Speed | Device key interval | Chunk size | Pause between chunks |
+|---|---|---|---|
+| Slow | 30 ms per key event | 512 bytes | none |
+| Balanced | 5 ms per key event | 128 bytes | 200 ms |
+| Fast (default) | 5 ms per key event | 512 bytes | none |
+| Turbo | 5 ms per key event | 4096 bytes | none |
+
+Turbo reduces request overhead; the device's physical typing limit remains. Balanced paces requests, but does not change intra-chunk key timing. Slow is the mode to try if characters are missed. Selection changes apply to the next paste; ongoing pastes retain their original speed. Effective speed depends on keymap, modifiers and round-trip time.
 
 **Response**
 ```json
@@ -72,7 +87,7 @@ Sends a single key press (down + up) to the remote machine.
 **Request body**
 ```json
 {
-  "key": "enter"
+  "key": "Enter"
 }
 ```
 
@@ -114,13 +129,13 @@ Sends a single key press (down + up) to the remote machine.
 
 Moves the mouse cursor to an absolute position on the remote screen.
 
-Coordinates use the HID absolute coordinate system: `0–32767` for both axes, where `(0, 0)` is top-left and `(32767, 32767)` is bottom-right.
+Coordinates use signed HID absolute coordinates: `-32767–32767` for both axes. `(-32767, -32767)` is top-left, `(0, 0)` is the center, and `(32767, 32767)` is bottom-right. You may instead provide `px` and `py` in screenshot pixels.
 
 **Request body**
 ```json
 {
-  "x": 16383,
-  "y": 16383
+  "x": 0,
+  "y": 0
 }
 ```
 

@@ -5,6 +5,7 @@ struct ManualConnectSheet: View {
     @Binding var hostPort: String
     @Binding var port: String
     @Binding var password: String
+    @Binding var allowUntrustedTLS: Bool
 
     let onConnect: () -> Void
 
@@ -21,6 +22,12 @@ struct ManualConnectSheet: View {
 
             SecureField("Password", text: $password)
                 .textFieldStyle(.roundedBorder)
+            Text("Saved in macOS Keychain after a successful sign-in.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            Toggle("Allow untrusted certificate (legacy device)", isOn: $allowUntrustedTLS)
+                .help("Disables certificate verification for this device only.")
 
             HStack {
                 Spacer()
@@ -58,6 +65,9 @@ struct PasswordPromptSheet: View {
             SecureField("Password", text: $password)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(submit)
+            Text("Saved in macOS Keychain after a successful sign-in.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             HStack {
                 Spacer()

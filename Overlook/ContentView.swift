@@ -19,6 +19,7 @@ struct ContentView: View {
     @State private var manualPort = "443"
 
     @State private var manualPassword = ""
+    @State private var manualAllowUntrustedTLS = false
 
     @State private var showingPasswordPrompt = false
     @State private var pendingPasswordDevice: KVMDevice?
@@ -201,6 +202,8 @@ struct ContentView: View {
                     devices: kvmDeviceManager.availableDevices,
                     connectedDeviceName: kvmDeviceManager.connectedDevice?.name,
                     videoBackendName: activeVideoBackendKind.displayName,
+                    signalingModeName: activeVideoBackendKind == .webRTC ? webRTCManager.signalingMode.rawValue : nil,
+                    nativeHIDReady: webRTCManager.signalingMode == .native ? webRTCManager.isNativeHIDReady : nil,
                     latency: activeVideoStatus.latency,
                     videoSize: activeVideoStatus.videoSize,
                     inboundVideoKbps: activeVideoStatus.inboundVideoKbps,
@@ -274,6 +277,12 @@ struct ContentView: View {
             updateInputCaptureForUIOverlays()
         }
         .onChange(of: showingQuickPaste) { _, _ in
+            updateInputCaptureForUIOverlays()
+        }
+        .onChange(of: showingManualConnect) { _, _ in
+            updateInputCaptureForUIOverlays()
+        }
+        .onChange(of: showingPasswordPrompt) { _, _ in
             updateInputCaptureForUIOverlays()
         }
         .onChange(of: windowRef) { _, newValue in
@@ -361,10 +370,19 @@ struct ContentView: View {
                 hostPort: $manualHostPort,
                 port: $manualPort,
                 password: $manualPassword,
+                allowUntrustedTLS: $manualAllowUntrustedTLS,
                 onConnect: {
                     manualConnect()
                 }
             )
+        }
+        .alert("Password Storage", isPresented: Binding(
+            get: { kvmDeviceManager.credentialStorageError != nil },
+            set: { if !$0 { kvmDeviceManager.credentialStorageError = nil } }
+        )) {
+            Button("OK") { kvmDeviceManager.credentialStorageError = nil }
+        } message: {
+            Text(kvmDeviceManager.credentialStorageError ?? "")
         }
         .sheet(isPresented: $showingPasswordPrompt) {
             PasswordPromptSheet(
@@ -456,6 +474,7 @@ struct ContentView: View {
                 if let client = kvmDeviceManager.glkvmClient {
                     inputManager.setGLKVMClient(client)
                     inputManager.startFullInputCapture()
+                    updateInputCaptureForUIOverlays()
                     try? await client.setHidConnected(true)
                 }
 
@@ -584,7 +603,15 @@ struct ContentView: View {
         }
 
         let port = Int(portString) ?? 443
-        let device = kvmDeviceManager.addManualDevice(host: host, port: port, type: .glinetComet)
+        let tlsPolicy: TLSValidationPolicy = manualAllowUntrustedTLS
+            ? .allowUntrustedLegacy
+            : .systemTrust
+        let device = kvmDeviceManager.addManualDevice(
+            host: host,
+            port: port,
+            type: .glinetComet,
+            tlsValidationPolicy: tlsPolicy
+        )
 
         suppressDeviceAutoConnect = true
         selectedDevice = device
@@ -592,7 +619,7 @@ struct ContentView: View {
             suppressDeviceAutoConnect = false
         }
 
-        let password = manualPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+        let password = manualPassword
         connectToDevice(device, password: password.isEmpty ? nil : password)
     }
 
@@ -680,6 +707,7 @@ struct ContentView: View {
                 if kvmDeviceManager.glkvmClient != nil {
                     inputManager.setGLKVMClient(kvmDeviceManager.glkvmClient)
                     inputManager.startFullInputCapture()
+                    updateInputCaptureForUIOverlays()
                 }
                 isStreamPaused = false
                 pausedStreamDevice = nil
@@ -850,22 +878,23 @@ struct ContentView: View {
 
     @MainActor
     private func updateInputCaptureForUIOverlays() {
-        let overlayOpen = showingSettings || showingConnections
+        let overlayOpen = showingSettings || showingConnections || showingQuickPaste
+            || showingManualConnect || showingPasswordPrompt
 
         if overlayOpen {
-            if isInputCapturePausedForUI == false {
-                pausedCaptureKeyboardWasEnabled = inputManager.isKeyboardCaptureEnabled
-                pausedCaptureMouseWasEnabled = inputManager.isMouseCaptureEnabled
-
-                if inputManager.isKeyboardCaptureEnabled {
-                    inputManager.stopKeyboardCapture()
-                }
-                if inputManager.isMouseCaptureEnabled {
-                    inputManager.stopMouseCapture()
-                }
-
-                isInputCapturePausedForUI = true
+            // A reconnect may restart capture while an existing overlay remains
+            // open. Always suspend the actual capture, not just the first time.
+            pausedCaptureKeyboardWasEnabled = (pausedCaptureKeyboardWasEnabled ?? false)
+                || inputManager.isKeyboardCaptureEnabled
+            pausedCaptureMouseWasEnabled = (pausedCaptureMouseWasEnabled ?? false)
+                || inputManager.isMouseCaptureEnabled
+            if inputManager.isKeyboardCaptureEnabled {
+                inputManager.stopKeyboardCapture()
             }
+            if inputManager.isMouseCaptureEnabled {
+                inputManager.stopMouseCapture()
+            }
+            isInputCapturePausedForUI = true
             return
         }
 
@@ -1285,6 +1314,8 @@ struct ConnectionsPopoverView: View {
     let devices: [KVMDevice]
     let connectedDeviceName: String?
     let videoBackendName: String
+    let signalingModeName: String?
+    let nativeHIDReady: Bool?
     let latency: Int
 
     let videoSize: CGSize?
@@ -1419,6 +1450,28 @@ struct ConnectionsPopoverView: View {
                 Text(videoBackendName)
                     .font(.caption)
                     .foregroundColor(.secondary)
+
+                if let signalingModeName {
+                    HStack {
+                        Text("Protocol")
+                            .font(.caption)
+                        Spacer()
+                        Text(signalingModeName == "native" ? "Native WebRTC" : "Janus WebRTC")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if let nativeHIDReady {
+                    HStack {
+                        Text("HID channel")
+                            .font(.caption)
+                        Spacer()
+                        Text(nativeHIDReady ? "Ready" : "Connecting")
+                            .font(.caption)
+                            .foregroundColor(nativeHIDReady ? .green : .secondary)
+                    }
+                }
 
                 HStack {
                     Text("Video")
